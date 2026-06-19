@@ -1,0 +1,25 @@
+# Build outputs
+bin/
+obj/
+
+# User-specific Visual Studio files
+*.user
+*.suo
+.vs/
+
+# Rider
+.idea/
+
+# NuGet
+*.nupkg
+packages/
+.nuget/
+artifacts/
+
+# NuGet publish secrets
+Deploy/.env
+.env
+
+# OS
+.DS_Store
+Thumbs.db

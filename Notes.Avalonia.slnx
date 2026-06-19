@@ -1,0 +1,5 @@
+<Solution>
+  <Project Path="Notes.Avalonia/Notes.Avalonia.csproj" />
+  <Project Path="Notes.Avalonia.Tests/Notes.Avalonia.Tests.csproj" />
+  <Project Path="Notes.Avalonia.Demo/Notes.Avalonia.Demo.csproj" />
+</Solution>

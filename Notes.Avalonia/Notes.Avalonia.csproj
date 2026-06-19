@@ -1,0 +1,34 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+
+    <!-- NuGet package metadata -->
+    <PackageId>Notes.Avalonia</PackageId>
+    <Version>0.1.0</Version>
+    <Title>Notes.Avalonia</Title>
+    <Authors>b-y-t-e</Authors>
+    <Description>A custom rich-text note editor control for Avalonia UI with inline image pasting support. Features multi-line notes, inline images, undo/redo, text selection, clipboard support, and MVVM binding.</Description>
+    <PackageTags>Notes Notepad Avalonia UI Editor Control MVVM Images</PackageTags>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/b-y-t-e/Notes.Avalonia</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/b-y-t-e/Notes.Avalonia</RepositoryUrl>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="..\README.md" Pack="true" PackagePath="" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Avalonia" Version="12.0.*" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Notes.Avalonia.Tests" />
+  </ItemGroup>
+
+</Project>

@@ -16,6 +16,7 @@ using global::Avalonia.Layout;
 using global::Avalonia.Input.Platform;
 using global::Avalonia.Media;
 using global::Avalonia.Media.Imaging;
+using global::Avalonia.VisualTree;
 using Notepad.Avalonia.Model;
 
 namespace Notepad.Avalonia.Controls;
@@ -212,6 +213,27 @@ public class NoteEditor : Control
     private bool _syncingFontProperties;
     private bool _syncingMarkdownText;
     private double _goalX = -1;
+    private const int MaxCacheEntries = 4096;
+    private readonly Dictionary<(string text, Typeface typeface, double fontSize), double> _measureCache = new();
+    private readonly Dictionary<(string text, Typeface typeface, double fontSize), FormattedText> _fmtCache = new();
+
+    private readonly HashSet<int> _dirtyItems = new();
+    private bool _fullLayoutRequired = true;
+    private ScrollViewer? _parentScrollViewer;
+    private double _viewportTop;
+    private double _viewportBottom;
+
+    private void ClearTextCaches()
+    {
+        _measureCache.Clear();
+        _fmtCache.Clear();
+    }
+
+    private void InvalidateItem(int itemIndex)
+    {
+        _dirtyItems.Add(itemIndex);
+        InvalidateMeasure();
+    }
 
     private void SyncMarkdownTextFromItems()
     {
@@ -315,12 +337,116 @@ public class NoteEditor : Control
         SyncDocumentDefaults();
     }
 
+    protected override void OnAttachedToVisualTree(VisualTreeAttachmentEventArgs e)
+    {
+        base.OnAttachedToVisualTree(e);
+        _parentScrollViewer = this.FindAncestorOfType<ScrollViewer>();
+        if (_parentScrollViewer != null)
+            _parentScrollViewer.ScrollChanged += OnParentScrollChanged;
+    }
+
     protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e)
     {
+        if (_parentScrollViewer != null)
+        {
+            _parentScrollViewer.ScrollChanged -= OnParentScrollChanged;
+            _parentScrollViewer = null;
+        }
         base.OnDetachedFromVisualTree(e);
         UnsubscribeItems(Items);
         UnsubscribeImages(Images);
         _imageCache.Clear();
+    }
+
+    private void OnParentScrollChanged(object? sender, ScrollChangedEventArgs e)
+    {
+        UpdateViewportBounds();
+        InvalidateVisual();
+    }
+
+    private void UpdateViewportBounds()
+    {
+        if (_parentScrollViewer == null)
+        {
+            _viewportTop = 0;
+            _viewportBottom = _desiredHeight;
+            return;
+        }
+        _viewportTop = _parentScrollViewer.Offset.Y;
+        _viewportBottom = _viewportTop + _parentScrollViewer.Viewport.Height;
+    }
+
+    private (int first, int last) GetVisibleItemRange()
+    {
+        if (_itemYPositions.Count == 0)
+            return (0, -1);
+
+        int first = BinarySearchFirstVisible();
+        int last = BinarySearchLastVisible();
+
+        first = Math.Max(0, first - 1);
+        last = Math.Min(_itemYPositions.Count - 1, last + 1);
+
+        return (first, last);
+    }
+
+    private int BinarySearchFirstVisible()
+    {
+        int lo = 0, hi = _itemYPositions.Count - 1;
+        int result = 0;
+        while (lo <= hi)
+        {
+            int mid = (lo + hi) / 2;
+            if (_itemYPositions[mid] + _itemHeights[mid] >= _viewportTop)
+            {
+                result = mid;
+                hi = mid - 1;
+            }
+            else
+            {
+                lo = mid + 1;
+            }
+        }
+        return result;
+    }
+
+    private int BinarySearchLastVisible()
+    {
+        int lo = 0, hi = _itemYPositions.Count - 1;
+        int result = hi;
+        while (lo <= hi)
+        {
+            int mid = (lo + hi) / 2;
+            if (_itemYPositions[mid] <= _viewportBottom)
+            {
+                result = mid;
+                lo = mid + 1;
+            }
+            else
+            {
+                hi = mid - 1;
+            }
+        }
+        return result;
+    }
+
+    private void EnsureCaretVisible()
+    {
+        if (_parentScrollViewer == null || _itemYPositions.Count == 0)
+            return;
+
+        int idx = Math.Clamp(Caret.ItemIndex, 0, _itemYPositions.Count - 1);
+        double caretTop = _itemYPositions[idx];
+        double caretBottom = caretTop + _itemHeights[idx];
+
+        var offset = _parentScrollViewer.Offset;
+        double viewTop = offset.Y;
+        double viewBottom = viewTop + _parentScrollViewer.Viewport.Height;
+
+        if (caretTop < viewTop)
+            _parentScrollViewer.Offset = new Vector(offset.X, caretTop);
+        else if (caretBottom > viewBottom)
+            _parentScrollViewer.Offset = new Vector(offset.X, caretBottom - _parentScrollViewer.Viewport.Height);
     }
 
     private void UnsubscribeItems(IList<NoteItemData>? items)
@@ -337,6 +463,7 @@ public class NoteEditor : Control
         base.OnPropertyChanged(change);
         if (change.Property == DefaultFontProperty || change.Property == DefaultFontSizeProperty)
         {
+            ClearTextCaches();
             SyncDocumentDefaults();
             if (change.Property == DefaultFontProperty && !_syncingFontProperties)
             {
@@ -379,6 +506,8 @@ public class NoteEditor : Control
             || change.Property == SelectionBrushProperty
             || change.Property == CaretBrushProperty)
         {
+            if (change.Property == ForegroundProperty)
+                _fmtCache.Clear();
             InvalidateVisual();
         }
         else if (change.Property == ItemsProperty)
@@ -433,31 +562,39 @@ public class NoteEditor : Control
 
     // ---- Layout ----
 
+    private double AvailableContentWidth =>
+        Math.Max((_desiredWidth > 0 ? _desiredWidth : 400) - EditorPadding.Left - EditorPadding.Right, 50);
+
+    private double ComputeItemHeight(List<WrappedLine> wrappedLines)
+    {
+        double height = 0;
+        for (int li = 0; li < wrappedLines.Count; li++)
+        {
+            height += wrappedLines[li].Height;
+            if (li < wrappedLines.Count - 1) height += WrapLineSpacing;
+        }
+        return Math.Max(height, Document.DefaultFontSize + 4);
+    }
+
     private void ComputeLayout()
     {
         _itemYPositions.Clear();
         _itemHeights.Clear();
         _itemWrapping.Clear();
+        _dirtyItems.Clear();
+        _fullLayoutRequired = false;
 
-        double availWidth = Math.Max((_desiredWidth > 0 ? _desiredWidth : 400) - EditorPadding.Left - EditorPadding.Right, 50);
+        double availWidth = AvailableContentWidth;
         double y = EditorPadding.Top;
 
         for (int i = 0; i < Document.Items.Count; i++)
         {
-            var item = Document.Items[i];
             _itemYPositions.Add(y);
 
-            var wrappedLines = ComputeItemWrapping(item, availWidth);
+            var wrappedLines = ComputeItemWrapping(Document.Items[i], availWidth);
             _itemWrapping.Add(wrappedLines);
 
-            double itemH = 0;
-            for (int li = 0; li < wrappedLines.Count; li++)
-            {
-                itemH += wrappedLines[li].Height;
-                if (li < wrappedLines.Count - 1) itemH += WrapLineSpacing;
-            }
-            itemH = Math.Max(itemH, Document.DefaultFontSize + 4);
-
+            double itemH = ComputeItemHeight(wrappedLines);
             _itemHeights.Add(itemH);
             y += itemH + LineSpacing;
         }
@@ -465,11 +602,49 @@ public class NoteEditor : Control
         _desiredHeight = y + EditorPadding.Bottom;
     }
 
+    private void ComputeIncrementalLayout()
+    {
+        double availWidth = AvailableContentWidth;
+
+        foreach (int i in _dirtyItems.OrderBy(x => x))
+        {
+            if (i >= Document.Items.Count || i >= _itemWrapping.Count) continue;
+
+            double oldHeight = _itemHeights[i];
+            var wrappedLines = ComputeItemWrapping(Document.Items[i], availWidth);
+            _itemWrapping[i] = wrappedLines;
+
+            double newHeight = ComputeItemHeight(wrappedLines);
+            double delta = newHeight - oldHeight;
+            _itemHeights[i] = newHeight;
+
+            if (Math.Abs(delta) > 0.001)
+            {
+                for (int j = i + 1; j < _itemYPositions.Count; j++)
+                    _itemYPositions[j] += delta;
+                _desiredHeight += delta;
+            }
+        }
+        _dirtyItems.Clear();
+    }
+
     protected override Size MeasureOverride(Size availableSize)
     {
         double w = double.IsInfinity(availableSize.Width) ? 400 : availableSize.Width;
-        _desiredWidth = Math.Max(w, 200);
-        ComputeLayout();
+        double newWidth = Math.Max(w, 200);
+
+        if (_fullLayoutRequired || Math.Abs(newWidth - _desiredWidth) > 0.1
+            || _itemWrapping.Count != Document.Items.Count)
+        {
+            _desiredWidth = newWidth;
+            ComputeLayout();
+        }
+        else if (_dirtyItems.Count > 0)
+        {
+            _desiredWidth = newWidth;
+            ComputeIncrementalLayout();
+        }
+
         return new Size(_desiredWidth, _desiredHeight);
     }
 
@@ -494,10 +669,13 @@ public class NoteEditor : Control
         if (_itemWrapping.Count != Document.Items.Count)
             ComputeLayout();
 
+        UpdateViewportBounds();
+        var (firstVisible, lastVisible) = GetVisibleItemRange();
+
         var (selFirst, selLast) = CurrentSelection.Ordered();
         var selBrush = SelectionBrush;
 
-        for (int i = 0; i < Document.Items.Count; i++)
+        for (int i = firstVisible; i <= lastVisible && i < Document.Items.Count; i++)
         {
             var item = Document.Items[i];
             double itemY = _itemYPositions[i];
@@ -550,9 +728,15 @@ public class NoteEditor : Control
                             context.FillRectangle(selBrush, new Rect(segX + sX, segY, sW, seg.Height));
                         }
 
-                        var fmt = new FormattedText(segText,
-                            System.Globalization.CultureInfo.CurrentCulture,
-                            FlowDirection.LeftToRight, typeface, fs, Foreground);
+                        var fmtKey = (segText, typeface, fs);
+                        if (!_fmtCache.TryGetValue(fmtKey, out var fmt))
+                        {
+                            fmt = new FormattedText(segText,
+                                System.Globalization.CultureInfo.CurrentCulture,
+                                FlowDirection.LeftToRight, typeface, fs, Foreground);
+                            if (_fmtCache.Count > MaxCacheEntries) _fmtCache.Clear();
+                            _fmtCache[fmtKey] = fmt;
+                        }
 
                         context.DrawText(fmt, new Point(segX, segY));
                     }
@@ -753,10 +937,16 @@ public class NoteEditor : Control
     private double MeasureTextWidth(string text, Typeface typeface, double fontSize)
     {
         if (text.Length == 0) return 0;
+        var key = (text, typeface, fontSize);
+        if (_measureCache.TryGetValue(key, out var cached))
+            return cached;
         var fmt = new FormattedText(text,
             System.Globalization.CultureInfo.CurrentCulture,
-            FlowDirection.LeftToRight, typeface, fontSize, Foreground);
-        return fmt.WidthIncludingTrailingWhitespace;
+            FlowDirection.LeftToRight, typeface, fontSize, Brushes.Transparent);
+        var width = fmt.WidthIncludingTrailingWhitespace;
+        if (_measureCache.Count > MaxCacheEntries) _measureCache.Clear();
+        _measureCache[key] = width;
+        return width;
     }
 
     // ---- Wrapping ----
@@ -944,7 +1134,7 @@ public class NoteEditor : Control
             Caret = cursor;
             SelectWordAtCaret();
             _mouseSelecting = false;
-            InvalidateMeasure();
+            InvalidateVisual();
             return;
         }
 
@@ -960,7 +1150,7 @@ public class NoteEditor : Control
             _mouseSelecting = true;
         }
 
-        InvalidateMeasure();
+        InvalidateVisual();
     }
 
     protected override void OnPointerMoved(PointerEventArgs e)
@@ -970,7 +1160,7 @@ public class NoteEditor : Control
 
         var pos = e.GetPosition(this);
         Caret = HitTestCursor(pos);
-        InvalidateMeasure();
+        InvalidateVisual();
     }
 
     protected override void OnPointerReleased(PointerReleasedEventArgs e)
@@ -981,12 +1171,23 @@ public class NoteEditor : Control
 
     private int HitTestItem(double y)
     {
-        for (int i = 0; i < _itemYPositions.Count; i++)
+        if (_itemYPositions.Count == 0)
+            return 0;
+
+        int lo = 0, hi = _itemYPositions.Count - 1;
+        while (lo <= hi)
         {
-            if (y >= _itemYPositions[i] && y < _itemYPositions[i] + _itemHeights[i] + LineSpacing)
-                return i;
+            int mid = (lo + hi) / 2;
+            double top = _itemYPositions[mid];
+            double bottom = top + _itemHeights[mid] + LineSpacing;
+            if (y < top)
+                hi = mid - 1;
+            else if (y >= bottom)
+                lo = mid + 1;
+            else
+                return mid;
         }
-        return Document.Items.Count - 1;
+        return Math.Clamp(lo, 0, Document.Items.Count - 1);
     }
 
     private CursorPosition HitTestCursor(Point pos)
@@ -1034,6 +1235,7 @@ public class NoteEditor : Control
         SaveUndoState(HasSelection ? UndoActionKind.Other : UndoActionKind.Typing);
         DeleteSelection();
         InsertTextAtCaret(e.Text);
+        EnsureCaretVisible();
         e.Handled = true;
     }
 
@@ -1126,7 +1328,7 @@ public class NoteEditor : Control
                 var docStart = CursorPosition.Start;
                 if (!shift) SelectionAnchor = docStart;
                 Caret = docStart;
-                InvalidateMeasure();
+                InvalidateVisual();
                 e.Handled = true;
                 break;
 
@@ -1135,7 +1337,7 @@ public class NoteEditor : Control
                 var home = new CursorPosition(Caret.ItemIndex, lineStart);
                 if (!shift) SelectionAnchor = home;
                 Caret = home;
-                InvalidateMeasure();
+                InvalidateVisual();
                 e.Handled = true;
                 break;
 
@@ -1144,7 +1346,7 @@ public class NoteEditor : Control
                 var docEnd = new CursorPosition(Document.Items.Count - 1, lastItem.TextLength);
                 if (!shift) SelectionAnchor = docEnd;
                 Caret = docEnd;
-                InvalidateMeasure();
+                InvalidateVisual();
                 e.Handled = true;
                 break;
 
@@ -1153,7 +1355,7 @@ public class NoteEditor : Control
                 var end = new CursorPosition(Caret.ItemIndex, lineEnd);
                 if (!shift) SelectionAnchor = end;
                 Caret = end;
-                InvalidateMeasure();
+                InvalidateVisual();
                 e.Handled = true;
                 break;
 
@@ -1189,6 +1391,9 @@ public class NoteEditor : Control
                 e.Handled = true;
                 break;
         }
+
+        if (e.Handled)
+            EnsureCaretVisible();
     }
 
     private NoteItem CurrentItem => Document.Items[Math.Clamp(Caret.ItemIndex, 0, Document.Items.Count - 1)];
@@ -1225,7 +1430,7 @@ public class NoteEditor : Control
         }
 
         ClearSelectionNoDelete();
-        InvalidateMeasure();
+        InvalidateItem(Caret.ItemIndex);
         NotifyDocumentChanged();
     }
 
@@ -1296,7 +1501,7 @@ public class NoteEditor : Control
         }
 
         ClearSelectionNoDelete();
-        InvalidateMeasure();
+        InvalidateItem(Caret.ItemIndex);
         NotifyDocumentChanged(ChangeKind.ImageChanged);
     }
 
@@ -1354,6 +1559,7 @@ public class NoteEditor : Control
         Document.Items.Insert(Caret.ItemIndex + 1, newItem);
         Caret = new CursorPosition(Caret.ItemIndex + 1, 0);
         ClearSelectionNoDelete();
+        _fullLayoutRequired = true;
         InvalidateMeasure();
         NotifyDocumentChanged(ChangeKind.StructureChanged);
     }
@@ -1398,6 +1604,7 @@ public class NoteEditor : Control
         }
 
         ClearSelectionNoDelete();
+        _fullLayoutRequired = true;
         InvalidateMeasure();
         NotifyDocumentChanged();
     }
@@ -1434,6 +1641,7 @@ public class NoteEditor : Control
         }
 
         ClearSelectionNoDelete();
+        _fullLayoutRequired = true;
         InvalidateMeasure();
         NotifyDocumentChanged();
     }
@@ -1470,6 +1678,7 @@ public class NoteEditor : Control
         Caret = first;
         ClearSelectionNoDelete();
         EnsureNonEmpty();
+        _fullLayoutRequired = true;
         InvalidateMeasure();
         NotifyDocumentChanged();
     }
@@ -1566,7 +1775,7 @@ public class NoteEditor : Control
         SelectionAnchor = CursorPosition.Start;
         var lastItem = Document.Items[^1];
         Caret = new CursorPosition(Document.Items.Count - 1, lastItem.TextLength);
-        InvalidateMeasure();
+        InvalidateVisual();
     }
 
     private void ClearSelectionNoDelete()
@@ -1761,7 +1970,7 @@ public class NoteEditor : Control
 
         Caret = newPos;
         if (!extend) SelectionAnchor = Caret;
-        InvalidateMeasure();
+        InvalidateVisual();
     }
 
     internal void MoveCaretByWord(int direction, bool extend)
@@ -1797,7 +2006,7 @@ public class NoteEditor : Control
         }
 
         if (!extend) SelectionAnchor = Caret;
-        InvalidateMeasure();
+        InvalidateVisual();
     }
 
     private void DeleteWordBackward()
@@ -1823,6 +2032,7 @@ public class NoteEditor : Control
         }
 
         ClearSelectionNoDelete();
+        _fullLayoutRequired = true;
         InvalidateMeasure();
         NotifyDocumentChanged();
     }
@@ -1846,6 +2056,7 @@ public class NoteEditor : Control
         }
 
         ClearSelectionNoDelete();
+        _fullLayoutRequired = true;
         InvalidateMeasure();
         NotifyDocumentChanged();
     }
@@ -1877,7 +2088,7 @@ public class NoteEditor : Control
                     Document.Items[itemIdx], wrappedLines[targetLineIdx], useX);
                 Caret = new CursorPosition(itemIdx, newOffset);
                 if (!extend) SelectionAnchor = Caret;
-                InvalidateMeasure();
+                InvalidateVisual();
                 return;
             }
 
@@ -1929,7 +2140,7 @@ public class NoteEditor : Control
         }
 
         if (!extend) SelectionAnchor = Caret;
-        InvalidateMeasure();
+        InvalidateVisual();
     }
 
     private static int FindCurrentWrappedLine(List<WrappedLine> wrappedLines, int offset, int direction)
@@ -1980,6 +2191,7 @@ public class NoteEditor : Control
             Caret = ClampCursorPosition(snapshot.Caret);
             SelectionAnchor = ClampCursorPosition(snapshot.Anchor);
         }
+        _fullLayoutRequired = true;
         InvalidateMeasure();
         NotifyDocumentChanged(ChangeKind.StructureChanged);
     }
@@ -2117,7 +2329,7 @@ public class NoteEditor : Control
 
         _changeGeneration++;
         UpdateDirtyState();
-        InvalidateMeasure();
+        InvalidateItem(idx);
         SyncMarkdownTextFromItems();
     }
 
@@ -2156,6 +2368,7 @@ public class NoteEditor : Control
 
         if (isFullLoad)
         {
+            _fullLayoutRequired = true;
             InvalidateMeasure();
             MarkClean();
         }
@@ -2163,6 +2376,7 @@ public class NoteEditor : Control
         {
             _changeGeneration++;
             UpdateDirtyState();
+            _fullLayoutRequired = true;
             InvalidateMeasure();
         }
     }
@@ -2328,7 +2542,7 @@ public class NoteEditor : Control
             for (int i = 0; i < Document.Items.Count; i++)
                 changed |= RefreshItemImages(Document.Items[i]);
         }
-        if (changed) InvalidateMeasure();
+        if (changed) { _fullLayoutRequired = true; InvalidateMeasure(); }
     }
 
     private void RefreshImageElementsForKey(string key)
@@ -2339,7 +2553,7 @@ public class NoteEditor : Control
             for (int i = 0; i < Document.Items.Count; i++)
                 changed |= RefreshItemImages(Document.Items[i], key);
         }
-        if (changed) InvalidateMeasure();
+        if (changed) { _fullLayoutRequired = true; InvalidateMeasure(); }
     }
 
     private bool RefreshItemImages(NoteItem item, string? filterKey = null)
@@ -2497,6 +2711,7 @@ public class NoteEditor : Control
             Caret = CursorPosition.Start;
             SelectionAnchor = CursorPosition.Start;
         }
+        _fullLayoutRequired = true;
         InvalidateMeasure();
         NotifyDocumentChanged(ChangeKind.StructureChanged);
     }
@@ -2504,6 +2719,7 @@ public class NoteEditor : Control
     public void AddItem(string text)
     {
         Document.Items.Add(new NoteItem(text));
+        _fullLayoutRequired = true;
         InvalidateMeasure();
         NotifyDocumentChanged(ChangeKind.StructureChanged);
     }

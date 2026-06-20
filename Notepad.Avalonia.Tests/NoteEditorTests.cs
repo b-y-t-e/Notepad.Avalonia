@@ -1,11 +1,13 @@
+using System.Collections.Generic;
+using System.Collections.ObjectModel;
 using global::Avalonia.Headless.NUnit;
 using global::Avalonia.Media;
 using global::Avalonia.Media.Imaging;
 using NUnit.Framework;
-using Notes.Avalonia.Controls;
-using Notes.Avalonia.Model;
+using Notepad.Avalonia.Controls;
+using Notepad.Avalonia.Model;
 
-namespace Notes.Avalonia.Tests;
+namespace Notepad.Avalonia.Tests;
 
 [TestFixture]
 public class NoteEditorTests
@@ -747,7 +749,7 @@ public class NoteEditorTests
     }
 
     [AvaloniaTest]
-    public void ItemsChangedEventFires()
+    public void ContentChangedEventFires()
     {
         var editor = new NoteEditor();
         var items = new System.Collections.ObjectModel.ObservableCollection<NoteItemData>
@@ -757,7 +759,7 @@ public class NoteEditorTests
         editor.Items = items;
 
         int fireCount = 0;
-        editor.ItemsChanged += (_, _) => fireCount++;
+        editor.ContentChanged += (_, _) => fireCount++;
 
         editor.Caret = new CursorPosition(0, 4);
         editor.SelectionAnchor = new CursorPosition(0, 4);
@@ -1053,6 +1055,530 @@ public class NoteEditorTests
         Assert.That(editor.Caret.Offset, Is.EqualTo(6));
         Assert.That(editor.SelectionAnchor.Offset, Is.EqualTo(0));
         Assert.That(editor.HasSelection, Is.True);
+    }
+
+    // ---- Images collection tests ----
+
+    [AvaloniaTest]
+    public void ImagesCollectionResolvesImageInText()
+    {
+        var editor = new NoteEditor();
+        var bmp = CreateTestBitmap();
+        var images = new ObservableCollection<ImageEntry>
+        {
+            new("photo1", bmp)
+        };
+        var items = new ObservableCollection<NoteItemData>
+        {
+            new("Before ![alt](photo1) after"),
+        };
+        editor.Images = images;
+        editor.Items = items;
+
+        Assert.That(editor.Document.Items[0].Elements.Count, Is.EqualTo(3));
+        Assert.That(editor.Document.Items[0].Elements[1].Type, Is.EqualTo(ContentElementType.Image));
+        Assert.That(editor.Document.Items[0].Elements[1].ImageKey, Is.EqualTo("photo1"));
+    }
+
+    [AvaloniaTest]
+    public void ImagesCollectionOrderIndependent_ItemsFirst()
+    {
+        var editor = new NoteEditor();
+        var bmp = CreateTestBitmap();
+
+        var items = new ObservableCollection<NoteItemData>
+        {
+            new("Text ![alt](pic1) end"),
+        };
+        editor.Items = items;
+
+        Assert.That(editor.Document.Items[0].Elements.All(
+            e => e.Type == ContentElementType.Text), Is.True);
+
+        var images = new ObservableCollection<ImageEntry>
+        {
+            new("pic1", bmp)
+        };
+        editor.Images = images;
+
+        Assert.That(editor.Document.Items[0].Elements[1].Type, Is.EqualTo(ContentElementType.Image));
+        Assert.That(editor.Document.Items[0].Elements[1].ImageKey, Is.EqualTo("pic1"));
+    }
+
+    [AvaloniaTest]
+    public void DeferredImageLoad_NullBitmapThenSet()
+    {
+        var editor = new NoteEditor();
+        var images = new ObservableCollection<ImageEntry>();
+        var items = new ObservableCollection<NoteItemData>
+        {
+            new("Before ![alt](lazy) after"),
+        };
+        editor.Images = images;
+        editor.Items = items;
+
+        var entry = new ImageEntry("lazy");
+        images.Add(entry);
+
+        Assert.That(editor.Document.Items[0].Elements.All(
+            e => e.Type == ContentElementType.Text), Is.True);
+
+        entry.Bitmap = CreateTestBitmap();
+
+        Assert.That(editor.Document.Items[0].Elements[1].Type, Is.EqualTo(ContentElementType.Image));
+        Assert.That(editor.Document.Items[0].Elements[1].ImageKey, Is.EqualTo("lazy"));
+    }
+
+    [AvaloniaTest]
+    public void MissingImageKeyStaysAsText_NoImagesCollection()
+    {
+        var editor = new NoteEditor();
+        var items = new ObservableCollection<NoteItemData>
+        {
+            new("Text ![alt](missing) more"),
+        };
+        editor.Items = items;
+
+        Assert.That(editor.Document.Items[0].Elements.All(
+            e => e.Type == ContentElementType.Text), Is.True);
+        Assert.That(editor.Document.Items[0].PlainText, Is.EqualTo("Text ![alt](missing) more"));
+    }
+
+    [AvaloniaTest]
+    public void PastedImageAutoAddsToImagesCollection()
+    {
+        var editor = new NoteEditor();
+        var images = new ObservableCollection<ImageEntry>();
+        editor.Images = images;
+
+        var items = new ObservableCollection<NoteItemData>
+        {
+            new("Before"),
+        };
+        editor.Items = items;
+
+        editor.Caret = new CursorPosition(0, 6);
+        editor.SelectionAnchor = new CursorPosition(0, 6);
+        editor.InsertImageAtCaret(CreateTestBitmap());
+
+        Assert.That(images.Count, Is.EqualTo(1));
+        Assert.That(items[0].Text, Does.Contain($"![image]({images[0].Key})"));
+    }
+
+    // ---- NoteMarkdown tests ----
+
+    [Test]
+    public void ParseMarkdown_PlainLines()
+    {
+        var items = NoteMarkdown.ParseMarkdown("Buy milk\nWalk the dog");
+
+        Assert.That(items.Count, Is.EqualTo(2));
+        Assert.That(items[0].Text, Is.EqualTo("Buy milk"));
+        Assert.That(items[1].Text, Is.EqualTo("Walk the dog"));
+    }
+
+    [Test]
+    public void ParseMarkdown_EmptyString()
+    {
+        var items = NoteMarkdown.ParseMarkdown("");
+        Assert.That(items.Count, Is.EqualTo(0));
+    }
+
+    [Test]
+    public void ParseMarkdown_NullString()
+    {
+        var items = NoteMarkdown.ParseMarkdown(null!);
+        Assert.That(items.Count, Is.EqualTo(0));
+    }
+
+    [Test]
+    public void ToMarkdown_RoundTrip()
+    {
+        var original = "Buy milk\nWalk the dog\nCode review";
+        var items = NoteMarkdown.ParseMarkdown(original);
+        var serialized = NoteMarkdown.ToMarkdown(items);
+
+        Assert.That(serialized, Is.EqualTo(original));
+    }
+
+    [Test]
+    public void ToMarkdown_WithImageSyntax()
+    {
+        var items = new List<NoteItemData>
+        {
+            new("Text with ![star](star) image")
+        };
+        var md = NoteMarkdown.ToMarkdown(items);
+
+        Assert.That(md, Is.EqualTo("Text with ![star](star) image"));
+    }
+
+    [Test]
+    public void ToMarkdownEmptyListReturnsEmpty()
+    {
+        var result = NoteMarkdown.ToMarkdown(new List<NoteItemData>());
+        Assert.That(result, Is.EqualTo(string.Empty));
+    }
+
+    [Test]
+    public void ToMarkdownNullReturnsEmpty()
+    {
+        var result = NoteMarkdown.ToMarkdown(null);
+        Assert.That(result, Is.EqualTo(string.Empty));
+    }
+
+    [Test]
+    public void ImageEntryNullKeyThrows()
+    {
+        Assert.Throws<System.ArgumentException>(() => new ImageEntry(null!));
+    }
+
+    [Test]
+    public void ImageEntryEmptyKeyThrows()
+    {
+        Assert.Throws<System.ArgumentException>(() => new ImageEntry(""));
+    }
+
+    [Test]
+    public void ParseMarkdownSkipsEmptyLines()
+    {
+        var items = NoteMarkdown.ParseMarkdown("First\n\n\nSecond\n");
+        Assert.That(items.Count, Is.EqualTo(2));
+        Assert.That(items[0].Text, Is.EqualTo("First"));
+        Assert.That(items[1].Text, Is.EqualTo("Second"));
+    }
+
+    // ---- IsDirty tests ----
+
+    [AvaloniaTest]
+    public void IsDirty_CleanAfterLoad()
+    {
+        var editor = new NoteEditor();
+        var items = new ObservableCollection<NoteItemData>
+        {
+            new("Item 1"),
+            new("Item 2"),
+        };
+        editor.Items = items;
+
+        Assert.That(editor.IsDirty, Is.False);
+    }
+
+    [AvaloniaTest]
+    public void IsDirty_DirtyAfterEdit()
+    {
+        var editor = new NoteEditor();
+        var items = new ObservableCollection<NoteItemData>
+        {
+            new("Item 1"),
+        };
+        editor.Items = items;
+
+        editor.Caret = new CursorPosition(0, 6);
+        editor.SelectionAnchor = editor.Caret;
+        editor.InsertTextAtCaret("X");
+
+        Assert.That(editor.IsDirty, Is.True);
+    }
+
+    [AvaloniaTest]
+    public void IsDirty_CleanAfterMarkClean()
+    {
+        var editor = new NoteEditor();
+        var items = new ObservableCollection<NoteItemData>
+        {
+            new("Item 1"),
+        };
+        editor.Items = items;
+
+        editor.InsertTextAtCaret("X");
+        Assert.That(editor.IsDirty, Is.True);
+
+        editor.MarkClean();
+        Assert.That(editor.IsDirty, Is.False);
+    }
+
+    [AvaloniaTest]
+    public void IsDirty_DirtyAfterUndo()
+    {
+        var editor = new NoteEditor();
+        var items = new ObservableCollection<NoteItemData>
+        {
+            new("Original"),
+        };
+        editor.Items = items;
+
+        editor.Caret = new CursorPosition(0, 8);
+        editor.SelectionAnchor = editor.Caret;
+        editor.SaveUndoState();
+        editor.InsertTextAtCaret("X");
+        editor.MarkClean();
+
+        Assert.That(editor.IsDirty, Is.False);
+
+        editor.Undo();
+        Assert.That(editor.IsDirty, Is.True);
+    }
+
+    [AvaloniaTest]
+    public void IsDirty_DirtyChangedEventFires()
+    {
+        var editor = new NoteEditor();
+        var items = new ObservableCollection<NoteItemData>
+        {
+            new("Item 1"),
+        };
+        editor.Items = items;
+
+        int fireCount = 0;
+        editor.DirtyChanged += (_, _) => fireCount++;
+
+        editor.InsertTextAtCaret("X");
+        Assert.That(fireCount, Is.EqualTo(1));
+
+        editor.MarkClean();
+        Assert.That(fireCount, Is.EqualTo(2));
+    }
+
+    [AvaloniaTest]
+    public void MvvmTextChangeSetsIsDirty()
+    {
+        var editor = new NoteEditor();
+        var items = new ObservableCollection<NoteItemData>
+        {
+            new NoteItemData("Hello")
+        };
+        editor.Items = items;
+
+        Assert.That(editor.IsDirty, Is.False);
+
+        items[0].Text = "Changed";
+
+        Assert.That(editor.IsDirty, Is.True);
+    }
+
+    [AvaloniaTest]
+    public void MvvmAddItemSetsIsDirty()
+    {
+        var editor = new NoteEditor();
+        var items = new ObservableCollection<NoteItemData>
+        {
+            new NoteItemData("First")
+        };
+        editor.Items = items;
+        editor.MarkClean();
+
+        Assert.That(editor.IsDirty, Is.False);
+
+        items.Add(new NoteItemData("Second"));
+
+        Assert.That(editor.IsDirty, Is.True);
+    }
+
+    [AvaloniaTest]
+    public void MvvmRemoveItemSetsIsDirty()
+    {
+        var editor = new NoteEditor();
+        var items = new ObservableCollection<NoteItemData>
+        {
+            new NoteItemData("First"),
+            new NoteItemData("Second")
+        };
+        editor.Items = items;
+        editor.MarkClean();
+
+        Assert.That(editor.IsDirty, Is.False);
+
+        items.RemoveAt(1);
+
+        Assert.That(editor.IsDirty, Is.True);
+    }
+
+    [AvaloniaTest]
+    public void DirtyChangedFiresOnMvvmChange()
+    {
+        var editor = new NoteEditor();
+        var items = new ObservableCollection<NoteItemData>
+        {
+            new NoteItemData("Hello")
+        };
+        editor.Items = items;
+
+        int firedCount = 0;
+        editor.DirtyChanged += (_, _) => firedCount++;
+
+        items[0].Text = "Changed";
+
+        Assert.That(firedCount, Is.EqualTo(1));
+        Assert.That(editor.IsDirty, Is.True);
+    }
+
+    [AvaloniaTest]
+    public void DefaultFontNameSyncsToDefaultFont()
+    {
+        var editor = new NoteEditor();
+        editor.DefaultFontName = "Consolas";
+        Assert.That(editor.DefaultFont.Name, Is.EqualTo("Consolas"));
+    }
+
+    [AvaloniaTest]
+    public void DefaultFontSyncsToDefaultFontName()
+    {
+        var editor = new NoteEditor();
+        editor.DefaultFont = new FontFamily("Consolas");
+        Assert.That(editor.DefaultFontName, Is.EqualTo("Consolas"));
+    }
+
+    [AvaloniaTest]
+    public void ImagePastedKeyOverrideUpdatesCorrectly()
+    {
+        var editor = new NoteEditor();
+        var images = new ObservableCollection<ImageEntry>();
+        editor.Images = images;
+        editor.Items = new ObservableCollection<NoteItemData> { new NoteItemData("test") };
+
+        editor.ImagePasted += (_, args) => { args.NewKey = "custom_key"; };
+        editor.InsertImageAtCaret(CreateTestBitmap());
+
+        Assert.That(images.Count, Is.EqualTo(1));
+        Assert.That(images[0].Key, Is.EqualTo("custom_key"));
+    }
+
+    [AvaloniaTest]
+    public void ImagePastedKeyOverrideUpdatesLegacyImageStore()
+    {
+        var editor = new NoteEditor();
+        var images = new ObservableCollection<ImageEntry>();
+        editor.Images = images;
+        editor.Items = new ObservableCollection<NoteItemData> { new NoteItemData("test") };
+
+        editor.ImagePasted += (_, args) => { args.NewKey = "remapped"; };
+        editor.InsertImageAtCaret(CreateTestBitmap());
+
+#pragma warning disable CS0618
+        Assert.That(editor.ImageStore.ContainsKey("remapped"), Is.True);
+        Assert.That(editor.ImageStore.Count, Is.EqualTo(1));
+#pragma warning restore CS0618
+    }
+
+    // ---- MarkdownText property tests ----
+
+    [AvaloniaTest]
+    public void MarkdownText_SetPopulatesItems()
+    {
+        var editor = new NoteEditor();
+        editor.MarkdownText = "First line\nSecond line";
+
+        Assert.That(editor.Items, Is.Not.Null);
+        Assert.That(editor.Items!.Count, Is.EqualTo(2));
+        Assert.That(editor.Items[0].Text, Is.EqualTo("First line"));
+        Assert.That(editor.Items[1].Text, Is.EqualTo("Second line"));
+    }
+
+    [AvaloniaTest]
+    public void MarkdownText_SyncsBackAfterEdit()
+    {
+        var editor = new NoteEditor();
+        editor.Items = new ObservableCollection<NoteItemData>
+        {
+            new NoteItemData("Buy milk"),
+            new NoteItemData("Walk dog")
+        };
+        editor.InsertTextAtCaret("extra");
+
+        Assert.That(editor.MarkdownText, Does.Contain("extraBuy milk"));
+        Assert.That(editor.MarkdownText, Does.Contain("Walk dog"));
+    }
+
+    [AvaloniaTest]
+    public void MarkdownText_SyncsWhenItemsSetDirectly()
+    {
+        var editor = new NoteEditor();
+        editor.Items = new ObservableCollection<NoteItemData>
+        {
+            new NoteItemData("Alpha"),
+            new NoteItemData("Beta")
+        };
+
+        Assert.That(editor.MarkdownText, Is.Not.Null);
+        Assert.That(editor.MarkdownText, Does.Contain("Alpha"));
+        Assert.That(editor.MarkdownText, Does.Contain("Beta"));
+    }
+
+    [AvaloniaTest]
+    public void MarkdownText_SetNullClearsItems()
+    {
+        var editor = new NoteEditor();
+        editor.MarkdownText = "Something";
+        Assert.That(editor.Items!.Count, Is.EqualTo(1));
+
+        editor.MarkdownText = null;
+        Assert.That(editor.Items!.Count, Is.EqualTo(0));
+    }
+
+    [AvaloniaTest]
+    public void MarkdownText_SetEmptyClearsItems()
+    {
+        var editor = new NoteEditor();
+        editor.MarkdownText = "Something";
+        editor.MarkdownText = "";
+        Assert.That(editor.Items!.Count, Is.EqualTo(0));
+    }
+
+    [AvaloniaTest]
+    public void MarkdownText_SyncsOnCollectionAdd()
+    {
+        var editor = new NoteEditor();
+        var items = new ObservableCollection<NoteItemData>
+        {
+            new NoteItemData("First")
+        };
+        editor.Items = items;
+
+        items.Add(new NoteItemData("Second"));
+
+        Assert.That(editor.MarkdownText, Does.Contain("First"));
+        Assert.That(editor.MarkdownText, Does.Contain("Second"));
+    }
+
+    [AvaloniaTest]
+    public void MarkdownText_SyncsOnCollectionRemove()
+    {
+        var editor = new NoteEditor();
+        var items = new ObservableCollection<NoteItemData>
+        {
+            new NoteItemData("First"),
+            new NoteItemData("Second")
+        };
+        editor.Items = items;
+
+        items.RemoveAt(0);
+
+        Assert.That(editor.MarkdownText, Is.EqualTo("Second"));
+    }
+
+    [AvaloniaTest]
+    public void MarkdownText_SyncsOnItemTextChange()
+    {
+        var editor = new NoteEditor();
+        var items = new ObservableCollection<NoteItemData>
+        {
+            new NoteItemData("Original")
+        };
+        editor.Items = items;
+
+        items[0].Text = "Modified";
+
+        Assert.That(editor.MarkdownText, Is.EqualTo("Modified"));
+    }
+
+    [AvaloniaTest]
+    public void MarkdownText_RoundtripPreservesContent()
+    {
+        var editor = new NoteEditor();
+        editor.MarkdownText = "Line one\nLine two";
+
+        Assert.That(editor.MarkdownText, Is.EqualTo("Line one\nLine two"));
     }
 
     private static Bitmap CreateTestBitmap()

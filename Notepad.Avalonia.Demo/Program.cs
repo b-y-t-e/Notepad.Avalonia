@@ -1,6 +1,6 @@
 using global::Avalonia;
 
-namespace Notes.Avalonia.Demo;
+namespace Notepad.Avalonia.Demo;
 
 class Program
 {

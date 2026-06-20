@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <ItemGroup>
-    <ProjectReference Include="..\Notes.Avalonia\Notes.Avalonia.csproj" />
+    <ProjectReference Include="..\Notepad.Avalonia\Notepad.Avalonia.csproj" />
   </ItemGroup>
 
   <ItemGroup>
@@ -19,7 +19,6 @@
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
 
 </Project>

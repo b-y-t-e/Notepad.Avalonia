@@ -5,7 +5,7 @@ using System.Text;
 using global::Avalonia.Media;
 using global::Avalonia.Media.Imaging;
 
-namespace Notes.Avalonia.Model;
+namespace Notepad.Avalonia.Model;
 
 public enum ContentElementType
 {
@@ -22,10 +22,13 @@ public class ContentElement
     public double ImageHeight { get; set; }
     public string? ImageKey { get; set; }
     public string? ImageAltText { get; set; }
+    internal string? UnresolvedImageKey { get; set; }
     public FontFamily Font { get; set; } = FontFamily.Default;
     public double FontSize { get; set; }
     public bool Bold { get; set; }
     public bool Italic { get; set; }
+
+    public int Length => Type == ContentElementType.Text ? Text.Length : 1;
 
     public static ContentElement CreateText(string text, FontFamily? font = null, double fontSize = 0)
     {
@@ -60,6 +63,7 @@ public class ContentElement
             ImageHeight = ImageHeight,
             ImageKey = ImageKey,
             ImageAltText = ImageAltText,
+            UnresolvedImageKey = UnresolvedImageKey,
             Font = Font,
             FontSize = FontSize,
             Bold = Bold,
@@ -104,7 +108,7 @@ public class NoteItem
         {
             int len = 0;
             foreach (var el in Elements)
-                len += el.Type == ContentElementType.Text ? el.Text.Length : 1;
+                len += el.Length;
             return len;
         }
     }
@@ -114,22 +118,14 @@ public class NoteItem
         int pos = 0;
         for (int i = 0; i < Elements.Count; i++)
         {
-            int elLen = Elements[i].Type == ContentElementType.Text ? Elements[i].Text.Length : 1;
+            int elLen = Elements[i].Length;
             bool isLast = i == Elements.Count - 1;
-            if (Elements[i].Type == ContentElementType.Text)
-            {
-                if (globalOffset < pos + elLen || (isLast && globalOffset <= pos + elLen))
-                    return (i, globalOffset - pos);
-            }
-            else
-            {
-                if (globalOffset < pos + elLen || (isLast && globalOffset <= pos + elLen))
-                    return (i, globalOffset - pos);
-            }
+            if (globalOffset < pos + elLen || (isLast && globalOffset <= pos + elLen))
+                return (i, globalOffset - pos);
             pos += elLen;
         }
         return (Math.Max(0, Elements.Count - 1), Elements.Count > 0
-            ? (Elements[^1].Type == ContentElementType.Text ? Elements[^1].Text.Length : 1)
+            ? Elements[^1].Length
             : 0);
     }
 
@@ -137,7 +133,7 @@ public class NoteItem
     {
         int pos = 0;
         for (int i = 0; i < elementIndex && i < Elements.Count; i++)
-            pos += Elements[i].Type == ContentElementType.Text ? Elements[i].Text.Length : 1;
+            pos += Elements[i].Length;
         return pos + offsetInElement;
     }
 
@@ -168,7 +164,7 @@ public class NoteItem
             pos--;
 
         if (pos <= 0)
-            return ClassifyAt(0) == CharClass.Whitespace ? 0 : 0;
+            return 0;
 
         var cls = ClassifyAt(pos);
         if (cls == CharClass.Image)

@@ -1,0 +1,5 @@
+<Solution>
+  <Project Path="Notepad.Avalonia/Notepad.Avalonia.csproj" />
+  <Project Path="Notepad.Avalonia.Tests/Notepad.Avalonia.Tests.csproj" />
+  <Project Path="Notepad.Avalonia.Demo/Notepad.Avalonia.Demo.csproj" />
+</Solution>

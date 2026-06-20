@@ -1,9 +1,9 @@
 using global::Avalonia;
 using global::Avalonia.Headless;
 
-[assembly: AvaloniaTestApplication(typeof(Notes.Avalonia.Tests.TestAppBuilder))]
+[assembly: AvaloniaTestApplication(typeof(Notepad.Avalonia.Tests.TestAppBuilder))]
 
-namespace Notes.Avalonia.Tests;
+namespace Notepad.Avalonia.Tests;
 
 public class TestAppBuilder
 {

@@ -1,0 +1,33 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:notepad="clr-namespace:Notepad.Avalonia.Controls;assembly=Notepad.Avalonia"
+        xmlns:local="clr-namespace:Notepad.Avalonia.Demo"
+        x:Class="Notepad.Avalonia.Demo.MvvmWindow"
+        x:DataType="local:DemoViewModel"
+        Title="Notepad Editor — MVVM Demo"
+        Width="900" Height="600"
+        WindowStartupLocation="CenterScreen">
+
+  <Window.DataContext>
+    <local:DemoViewModel />
+  </Window.DataContext>
+
+  <DockPanel>
+    <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal">
+      <TextBlock Margin="8,4" FontSize="12" Foreground="Gray"
+                 Text="{Binding StatusText}" />
+    </StackPanel>
+
+    <ScrollViewer HorizontalScrollBarVisibility="Disabled"
+                  VerticalScrollBarVisibility="Auto">
+      <notepad:NoteEditor DefaultFontSize="15"
+                          MarkdownText="{Binding MarkdownText}"
+                          Images="{Binding Images}">
+        <notepad:NoteEditor.DefaultFont>
+          <FontFamily>Segoe UI</FontFamily>
+        </notepad:NoteEditor.DefaultFont>
+      </notepad:NoteEditor>
+    </ScrollViewer>
+  </DockPanel>
+
+</Window>

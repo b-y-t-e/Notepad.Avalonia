@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.ObjectModel;
 using System.Collections.Specialized;
 using System.ComponentModel;
 using System.IO;
@@ -8,15 +9,16 @@ using System.Text;
 using System.Text.RegularExpressions;
 using global::Avalonia;
 using global::Avalonia.Controls;
+using global::Avalonia.Data;
 using global::Avalonia.Controls.Primitives;
 using global::Avalonia.Input;
 using global::Avalonia.Layout;
 using global::Avalonia.Input.Platform;
 using global::Avalonia.Media;
 using global::Avalonia.Media.Imaging;
-using Notes.Avalonia.Model;
+using Notepad.Avalonia.Model;
 
-namespace Notes.Avalonia.Controls;
+namespace Notepad.Avalonia.Controls;
 
 public enum ImageDisplayMode { Inline, Block }
 
@@ -33,7 +35,7 @@ public class NoteEditor : Control
     public static readonly StyledProperty<double> DefaultFontSizeProperty =
         AvaloniaProperty.Register<NoteEditor, double>(nameof(DefaultFontSize), 14.0);
 
-    public static readonly StyledProperty<IList<NoteItemData>?> ItemsProperty =
+    internal static readonly StyledProperty<IList<NoteItemData>?> ItemsProperty =
         AvaloniaProperty.Register<NoteEditor, IList<NoteItemData>?>(nameof(Items));
 
     public static readonly StyledProperty<double> InlineImageMaxHeightProperty =
@@ -65,6 +67,19 @@ public class NoteEditor : Control
     public static readonly StyledProperty<double> WrapLineSpacingProperty =
         AvaloniaProperty.Register<NoteEditor, double>(nameof(WrapLineSpacing), 2.0);
 
+    public static readonly StyledProperty<IEnumerable<ImageEntry>?> ImagesProperty =
+        AvaloniaProperty.Register<NoteEditor, IEnumerable<ImageEntry>?>(nameof(Images));
+
+    public static readonly DirectProperty<NoteEditor, bool> IsDirtyProperty =
+        AvaloniaProperty.RegisterDirect<NoteEditor, bool>(nameof(IsDirty), o => o.IsDirty);
+
+    public static readonly StyledProperty<string?> DefaultFontNameProperty =
+        AvaloniaProperty.Register<NoteEditor, string?>(nameof(DefaultFontName));
+
+    public static readonly StyledProperty<string?> MarkdownTextProperty =
+        AvaloniaProperty.Register<NoteEditor, string?>(nameof(MarkdownText),
+            defaultBindingMode: BindingMode.TwoWay);
+
     public EditorTheme ColorTheme
     {
         get => GetValue(ColorThemeProperty);
@@ -83,7 +98,7 @@ public class NoteEditor : Control
         set => SetValue(DefaultFontSizeProperty, value);
     }
 
-    public IList<NoteItemData>? Items
+    internal IList<NoteItemData>? Items
     {
         get => GetValue(ItemsProperty);
         set => SetValue(ItemsProperty, value);
@@ -143,9 +158,36 @@ public class NoteEditor : Control
         set => SetValue(WrapLineSpacingProperty, value);
     }
 
-    public Dictionary<string, Bitmap> ImageStore { get; } = new();
+    public IEnumerable<ImageEntry>? Images
+    {
+        get => GetValue(ImagesProperty);
+        set => SetValue(ImagesProperty, value);
+    }
 
-    public event EventHandler? ItemsChanged;
+    private bool _isDirty;
+    public bool IsDirty => _isDirty;
+
+    public string? DefaultFontName
+    {
+        get => GetValue(DefaultFontNameProperty);
+        set => SetValue(DefaultFontNameProperty, value);
+    }
+
+    public string? MarkdownText
+    {
+        get => GetValue(MarkdownTextProperty);
+        set => SetValue(MarkdownTextProperty, value);
+    }
+
+    private readonly Dictionary<string, Bitmap> _legacyImageStore = new();
+
+    [Obsolete("Use the Images StyledProperty instead.")]
+    public Dictionary<string, Bitmap> ImageStore => _legacyImageStore;
+
+    public event EventHandler? ContentChanged;
+    public event EventHandler<ContentChangedEventArgs>? ContentDetailChanged;
+    public event EventHandler<ImagePastedEventArgs>? ImagePasted;
+    public event EventHandler? DirtyChanged;
 
     public NoteDocument Document { get; } = new();
     public CursorPosition Caret { get; set; } = CursorPosition.Start;
@@ -163,6 +205,56 @@ public class NoteEditor : Control
     private List<List<ContentElement>>? _internalClipboard;
     private string? _internalClipboardText;
     private int _suppressSyncCount;
+    private readonly Dictionary<string, Bitmap> _imageCache = new();
+    private readonly List<ImageEntry> _subscribedImageEntries = new();
+    private long _changeGeneration;
+    private long _cleanGeneration;
+    private bool _syncingFontProperties;
+    private bool _syncingMarkdownText;
+    private double _goalX = -1;
+
+    private void SyncMarkdownTextFromItems()
+    {
+        if (_syncingMarkdownText) return;
+        _syncingMarkdownText = true;
+        try { MarkdownText = NoteMarkdown.ToMarkdown(Items); }
+        finally { _syncingMarkdownText = false; }
+    }
+
+    private void ApplyParsedMarkdownToItems(List<NoteItemData> parsed)
+    {
+        var items = Items;
+        if (items == null)
+        {
+            Items = new ObservableCollection<NoteItemData>(parsed);
+            return;
+        }
+
+        using (SuppressSync())
+        {
+            for (int i = 0; i < parsed.Count; i++)
+            {
+                if (i < items.Count)
+                {
+                    if (items[i].Text != parsed[i].Text) items[i].Text = parsed[i].Text;
+                }
+                else
+                {
+                    var newData = new NoteItemData(parsed[i].Text);
+                    newData.PropertyChanged += OnItemDataPropertyChanged;
+                    items.Add(newData);
+                }
+            }
+
+            while (items.Count > parsed.Count)
+            {
+                items[items.Count - 1].PropertyChanged -= OnItemDataPropertyChanged;
+                items.RemoveAt(items.Count - 1);
+            }
+        }
+
+        ResetDocumentFromItems();
+    }
 
     private SyncGuard SuppressSync() => new(this);
 
@@ -227,6 +319,8 @@ public class NoteEditor : Control
     {
         base.OnDetachedFromVisualTree(e);
         UnsubscribeItems(Items);
+        UnsubscribeImages(Images);
+        _imageCache.Clear();
     }
 
     private void UnsubscribeItems(IList<NoteItemData>? items)
@@ -244,7 +338,29 @@ public class NoteEditor : Control
         if (change.Property == DefaultFontProperty || change.Property == DefaultFontSizeProperty)
         {
             SyncDocumentDefaults();
+            if (change.Property == DefaultFontProperty && !_syncingFontProperties)
+            {
+                _syncingFontProperties = true;
+                try
+                {
+                    var font = (FontFamily?)change.NewValue;
+                    if (font != null)
+                        DefaultFontName = font.Name;
+                }
+                finally { _syncingFontProperties = false; }
+            }
             InvalidateMeasure();
+        }
+        else if (change.Property == DefaultFontNameProperty && !_syncingFontProperties)
+        {
+            _syncingFontProperties = true;
+            try
+            {
+                var name = (string?)change.NewValue;
+                if (name != null)
+                    DefaultFont = new FontFamily(name);
+            }
+            finally { _syncingFontProperties = false; }
         }
         else if (change.Property == InlineImageMaxHeightProperty
             || change.Property == ImageDisplayProperty
@@ -270,6 +386,22 @@ public class NoteEditor : Control
             OnItemsPropertyChanged(
                 change.OldValue as IList<NoteItemData>,
                 change.NewValue as IList<NoteItemData>);
+        }
+        else if (change.Property == ImagesProperty)
+        {
+            OnImagesPropertyChanged(
+                change.OldValue as IEnumerable<ImageEntry>,
+                change.NewValue as IEnumerable<ImageEntry>);
+        }
+        else if (change.Property == MarkdownTextProperty && !_syncingMarkdownText)
+        {
+            _syncingMarkdownText = true;
+            try
+            {
+                var parsed = NoteMarkdown.ParseMarkdown(change.NewValue as string);
+                ApplyParsedMarkdownToItems(parsed);
+            }
+            finally { _syncingMarkdownText = false; }
         }
     }
 
@@ -330,7 +462,7 @@ public class NoteEditor : Control
             y += itemH + LineSpacing;
         }
 
-        _desiredHeight = y + EditorPadding.Top;
+        _desiredHeight = y + EditorPadding.Bottom;
     }
 
     protected override Size MeasureOverride(Size availableSize)
@@ -801,6 +933,7 @@ public class NoteEditor : Control
     {
         base.OnPointerPressed(e);
         Focus();
+        _goalX = -1;
 
         var pos = e.GetPosition(this);
         var cursor = HitTestCursor(pos);
@@ -896,6 +1029,7 @@ public class NoteEditor : Control
     {
         base.OnTextInput(e);
         if (string.IsNullOrEmpty(e.Text)) return;
+        _goalX = -1;
 
         SaveUndoState(HasSelection ? UndoActionKind.Other : UndoActionKind.Typing);
         DeleteSelection();
@@ -906,6 +1040,10 @@ public class NoteEditor : Control
     protected override void OnKeyDown(KeyEventArgs e)
     {
         base.OnKeyDown(e);
+
+        if (e.Key != Key.Up && e.Key != Key.Down)
+            _goalX = -1;
+
         var ctrl = e.KeyModifiers.HasFlag(KeyModifiers.Control);
         var shift = e.KeyModifiers.HasFlag(KeyModifiers.Shift);
 
@@ -1037,7 +1175,6 @@ public class NoteEditor : Control
                 break;
 
             case Key.V when ctrl:
-                SaveUndoState();
                 _ = PasteFromClipboard();
                 e.Handled = true;
                 break;
@@ -1092,14 +1229,45 @@ public class NoteEditor : Control
         NotifyDocumentChanged();
     }
 
+    private string RegisterPastedImage(Bitmap bitmap)
+    {
+        string key = $"img_{Guid.NewGuid():N}";
+        _imageCache[key] = bitmap;
+
+        var args = new ImagePastedEventArgs(bitmap, key);
+        ImagePasted?.Invoke(this, args);
+
+        if (args.NewKey != null && args.NewKey != key)
+        {
+            _imageCache.Remove(key);
+            key = args.NewKey;
+            _imageCache[key] = bitmap;
+        }
+
+        if (Images is ICollection<ImageEntry> imageCollection)
+            imageCollection.Add(new ImageEntry(key, bitmap));
+
+        _legacyImageStore[key] = bitmap;
+        return key;
+    }
+
     public void InsertImageAtCaret(Bitmap bitmap)
     {
         EnsureValidCaret();
+        SaveUndoState();
+        InsertImageAtCaretCore(bitmap);
+    }
+
+    private void InsertImageAtCaretCore(Bitmap bitmap)
+    {
         DeleteSelection();
         var item = Document.Items[Caret.ItemIndex];
         int offset = Math.Min(Caret.Offset, item.TextLength);
 
+        string key = RegisterPastedImage(bitmap);
+
         var imgEl = ContentElement.CreateImage(bitmap);
+        imgEl.ImageKey = key;
 
         if (item.Elements.Count == 0)
         {
@@ -1129,7 +1297,7 @@ public class NoteEditor : Control
 
         ClearSelectionNoDelete();
         InvalidateMeasure();
-        NotifyDocumentChanged();
+        NotifyDocumentChanged(ChangeKind.ImageChanged);
     }
 
     public void SplitItemAtCaret()
@@ -1187,7 +1355,7 @@ public class NoteEditor : Control
         Caret = new CursorPosition(Caret.ItemIndex + 1, 0);
         ClearSelectionNoDelete();
         InvalidateMeasure();
-        NotifyDocumentChanged();
+        NotifyDocumentChanged(ChangeKind.StructureChanged);
     }
 
     private void HandleBackspace()
@@ -1526,6 +1694,7 @@ public class NoteEditor : Control
 
     private void PasteRichContent(List<List<ContentElement>> lines)
     {
+        SaveUndoState();
         using (SuppressSync())
         {
             DeleteSelection();
@@ -1534,7 +1703,7 @@ public class NoteEditor : Control
                 foreach (var el in lines[i])
                 {
                     if (el.Type == ContentElementType.Image && el.Image != null)
-                        InsertImageAtCaret(el.Image);
+                        InsertImageAtCaretCore(el.Image);
                     else if (el.Type == ContentElementType.Text && el.Text.Length > 0)
                         InsertTextAtCaret(el.Text);
                 }
@@ -1547,6 +1716,7 @@ public class NoteEditor : Control
 
     public void PasteMultilineText(string text)
     {
+        SaveUndoState();
         using (SuppressSync())
         {
             DeleteSelection();
@@ -1685,28 +1855,26 @@ public class NoteEditor : Control
         EnsureValidCaret();
         int itemIdx = Caret.ItemIndex;
 
+        if (_goalX < 0)
+        {
+            var (cx, _, _) = CalculateCaretPosition(itemIdx, Caret.Offset);
+            _goalX = cx;
+        }
+
+        double useX = _goalX;
+
         if (itemIdx < _itemWrapping.Count)
         {
             var wrappedLines = _itemWrapping[itemIdx];
 
-            int currentLineIdx = 0;
-            for (int li = 0; li < wrappedLines.Count; li++)
-            {
-                if (Caret.Offset < wrappedLines[li].EndGlobalOffset
-                    || li == wrappedLines.Count - 1)
-                {
-                    currentLineIdx = li;
-                    break;
-                }
-            }
+            int currentLineIdx = FindCurrentWrappedLine(wrappedLines, Caret.Offset, direction);
 
             int targetLineIdx = currentLineIdx + direction;
 
             if (targetLineIdx >= 0 && targetLineIdx < wrappedLines.Count)
             {
-                var (caretX, _, _) = CalculateCaretPosition(itemIdx, Caret.Offset);
                 int newOffset = HitTestLineOffset(
-                    Document.Items[itemIdx], wrappedLines[targetLineIdx], caretX);
+                    Document.Items[itemIdx], wrappedLines[targetLineIdx], useX);
                 Caret = new CursorPosition(itemIdx, newOffset);
                 if (!extend) SelectionAnchor = Caret;
                 InvalidateMeasure();
@@ -1715,12 +1883,11 @@ public class NoteEditor : Control
 
             if (direction < 0 && itemIdx > 0)
             {
-                var (caretX, _, _) = CalculateCaretPosition(itemIdx, Caret.Offset);
                 int prevIdx = itemIdx - 1;
                 if (prevIdx < _itemWrapping.Count && _itemWrapping[prevIdx].Count > 0)
                 {
                     int newOffset = HitTestLineOffset(
-                        Document.Items[prevIdx], _itemWrapping[prevIdx][^1], caretX);
+                        Document.Items[prevIdx], _itemWrapping[prevIdx][^1], useX);
                     Caret = new CursorPosition(prevIdx, newOffset);
                 }
                 else
@@ -1728,20 +1895,29 @@ public class NoteEditor : Control
                     Caret = new CursorPosition(prevIdx, Document.Items[prevIdx].TextLength);
                 }
             }
+            else if (direction < 0 && itemIdx == 0 && Caret.Offset > 0)
+            {
+                Caret = new CursorPosition(0, 0);
+            }
             else if (direction > 0 && itemIdx < Document.Items.Count - 1)
             {
-                var (caretX, _, _) = CalculateCaretPosition(itemIdx, Caret.Offset);
                 int nextIdx = itemIdx + 1;
                 if (nextIdx < _itemWrapping.Count && _itemWrapping[nextIdx].Count > 0)
                 {
                     int newOffset = HitTestLineOffset(
-                        Document.Items[nextIdx], _itemWrapping[nextIdx][0], caretX);
+                        Document.Items[nextIdx], _itemWrapping[nextIdx][0], useX);
                     Caret = new CursorPosition(nextIdx, newOffset);
                 }
                 else
                 {
                     Caret = new CursorPosition(nextIdx, 0);
                 }
+            }
+            else if (direction > 0 && itemIdx == Document.Items.Count - 1)
+            {
+                int endOffset = Document.Items[itemIdx].TextLength;
+                if (Caret.Offset < endOffset)
+                    Caret = new CursorPosition(itemIdx, endOffset);
             }
         }
         else
@@ -1754,6 +1930,23 @@ public class NoteEditor : Control
 
         if (!extend) SelectionAnchor = Caret;
         InvalidateMeasure();
+    }
+
+    private static int FindCurrentWrappedLine(List<WrappedLine> wrappedLines, int offset, int direction)
+    {
+        for (int li = 0; li < wrappedLines.Count; li++)
+        {
+            int end = wrappedLines[li].EndGlobalOffset;
+            if (offset < end)
+                return li;
+            if (offset == end)
+            {
+                if (direction > 0 && li + 1 < wrappedLines.Count)
+                    return li + 1;
+                return li;
+            }
+        }
+        return wrappedLines.Count - 1;
     }
 
     // ---- Undo / Redo ----
@@ -1788,7 +1981,7 @@ public class NoteEditor : Control
             SelectionAnchor = ClampCursorPosition(snapshot.Anchor);
         }
         InvalidateMeasure();
-        NotifyDocumentChanged();
+        NotifyDocumentChanged(ChangeKind.StructureChanged);
     }
 
     internal void SaveUndoState(UndoActionKind action = UndoActionKind.Other)
@@ -1855,10 +2048,14 @@ public class NoteEditor : Control
 
     // ---- MVVM synchronization ----
 
-    private void NotifyDocumentChanged()
+    private void NotifyDocumentChanged(ChangeKind kind = ChangeKind.TextChanged)
     {
         if (_suppressSyncCount == 0)
-            SyncToItems();
+        {
+            _changeGeneration++;
+            SyncToItems(kind);
+            UpdateDirtyState();
+        }
     }
 
     private void OnItemsPropertyChanged(IList<NoteItemData>? oldItems, IList<NoteItemData>? newItems)
@@ -1871,7 +2068,8 @@ public class NoteEditor : Control
             foreach (var item in newItems)
                 item.PropertyChanged += OnItemDataPropertyChanged;
 
-        SyncFromItems();
+        ResetDocumentFromItems();
+        SyncMarkdownTextFromItems();
     }
 
     private void OnItemsCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
@@ -1885,7 +2083,13 @@ public class NoteEditor : Control
             foreach (NoteItemData item in e.NewItems)
                 item.PropertyChanged += OnItemDataPropertyChanged;
 
-        SyncFromItems();
+        ApplyItemsCollectionChange();
+    }
+
+    private void ApplyItemsCollectionChange()
+    {
+        LoadDocumentFromItems(isFullLoad: false);
+        SyncMarkdownTextFromItems();
     }
 
     private void OnItemDataPropertyChanged(object? sender, PropertyChangedEventArgs e)
@@ -1910,16 +2114,28 @@ public class NoteEditor : Control
                 Document.Items[idx] = newItem;
             }
         }
+
+        _changeGeneration++;
+        UpdateDirtyState();
         InvalidateMeasure();
+        SyncMarkdownTextFromItems();
     }
 
-    private void SyncFromItems()
+    private void ResetDocumentFromItems()
+    {
+        LoadDocumentFromItems(isFullLoad: true);
+    }
+
+    private void LoadDocumentFromItems(bool isFullLoad)
     {
         var items = Items;
         if (items == null) return;
 
-        _undoStack.Clear();
-        _redoStack.Clear();
+        if (isFullLoad)
+        {
+            _undoStack.Clear();
+            _redoStack.Clear();
+        }
 
         using (SuppressSync())
         {
@@ -1937,10 +2153,21 @@ public class NoteEditor : Control
             Caret = ClampCursorPosition(Caret);
             SelectionAnchor = ClampCursorPosition(SelectionAnchor);
         }
-        InvalidateMeasure();
+
+        if (isFullLoad)
+        {
+            InvalidateMeasure();
+            MarkClean();
+        }
+        else
+        {
+            _changeGeneration++;
+            UpdateDirtyState();
+            InvalidateMeasure();
+        }
     }
 
-    private void SyncToItems()
+    private void SyncToItems(ChangeKind kind = ChangeKind.TextChanged)
     {
         var items = Items;
         if (items == null || _suppressSyncCount > 0) return;
@@ -1969,8 +2196,206 @@ public class NoteEditor : Control
                 items.RemoveAt(items.Count - 1);
             }
         }
-        ItemsChanged?.Invoke(this, EventArgs.Empty);
+        SyncMarkdownTextFromItems();
+        ContentChanged?.Invoke(this, EventArgs.Empty);
+        ContentDetailChanged?.Invoke(this, new ContentChangedEventArgs(kind));
     }
+
+    // ---- Images collection ----
+
+    private void OnImagesPropertyChanged(IEnumerable<ImageEntry>? oldImages, IEnumerable<ImageEntry>? newImages)
+    {
+        UnsubscribeImages(oldImages);
+        RebuildImageCache();
+        SubscribeImages(newImages);
+        RefreshAllImageElements();
+    }
+
+    private void SubscribeImages(IEnumerable<ImageEntry>? images)
+    {
+        if (images is INotifyCollectionChanged ncc)
+            ncc.CollectionChanged += OnImagesCollectionChanged;
+        if (images != null)
+            foreach (var entry in images)
+                SubscribeImageEntry(entry);
+    }
+
+    private void UnsubscribeImages(IEnumerable<ImageEntry>? images)
+    {
+        UnsubscribeAllImageEntries();
+        if (images is INotifyCollectionChanged ncc)
+            ncc.CollectionChanged -= OnImagesCollectionChanged;
+    }
+
+    private void SubscribeImageEntry(ImageEntry entry)
+    {
+        entry.PropertyChanged += OnImageEntryPropertyChanged;
+        _subscribedImageEntries.Add(entry);
+    }
+
+    private void UnsubscribeAllImageEntries()
+    {
+        foreach (var entry in _subscribedImageEntries)
+            entry.PropertyChanged -= OnImageEntryPropertyChanged;
+        _subscribedImageEntries.Clear();
+    }
+
+    private void RebuildImageCache()
+    {
+        _imageCache.Clear();
+        var images = Images;
+        if (images == null) return;
+        foreach (var entry in images)
+        {
+            if (entry.Bitmap != null)
+                _imageCache[entry.Key] = entry.Bitmap;
+        }
+    }
+
+    private void SyncLegacyImageStoreFromCache()
+    {
+        _legacyImageStore.Clear();
+        foreach (var kvp in _imageCache)
+            _legacyImageStore[kvp.Key] = kvp.Value;
+    }
+
+    private void OnImagesCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
+    {
+        if (e.Action == NotifyCollectionChangedAction.Reset)
+        {
+            UnsubscribeAllImageEntries();
+            if (Images != null)
+                foreach (var entry in Images)
+                    SubscribeImageEntry(entry);
+            RebuildImageCache();
+            SyncLegacyImageStoreFromCache();
+            RefreshAllImageElements();
+            return;
+        }
+
+        if (e.OldItems != null)
+            foreach (ImageEntry entry in e.OldItems)
+            {
+                entry.PropertyChanged -= OnImageEntryPropertyChanged;
+                _subscribedImageEntries.Remove(entry);
+                _legacyImageStore.Remove(entry.Key);
+            }
+        if (e.NewItems != null)
+            foreach (ImageEntry entry in e.NewItems)
+            {
+                SubscribeImageEntry(entry);
+                if (entry.Bitmap != null)
+                    _legacyImageStore[entry.Key] = entry.Bitmap;
+            }
+
+        RebuildImageCache();
+        RefreshAllImageElements();
+    }
+
+    private void OnImageEntryPropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (sender is not ImageEntry entry) return;
+
+        if (e.PropertyName == nameof(ImageEntry.Bitmap))
+        {
+            if (entry.Bitmap != null)
+                _imageCache[entry.Key] = entry.Bitmap;
+            else
+                _imageCache.Remove(entry.Key);
+
+            RefreshImageElementsForKey(entry.Key);
+        }
+        else if (e.PropertyName == nameof(ImageEntry.Key))
+        {
+            RebuildImageCache();
+            SyncLegacyImageStoreFromCache();
+            RefreshAllImageElements();
+        }
+    }
+
+    private Bitmap? ResolveImageByKey(string key)
+    {
+        if (_imageCache.TryGetValue(key, out var cached)) return cached;
+        if (_legacyImageStore.TryGetValue(key, out var legacy)) return legacy;
+        return null;
+    }
+
+    private void RefreshAllImageElements()
+    {
+        bool changed = false;
+        using (SuppressSync())
+        {
+            for (int i = 0; i < Document.Items.Count; i++)
+                changed |= RefreshItemImages(Document.Items[i]);
+        }
+        if (changed) InvalidateMeasure();
+    }
+
+    private void RefreshImageElementsForKey(string key)
+    {
+        bool changed = false;
+        using (SuppressSync())
+        {
+            for (int i = 0; i < Document.Items.Count; i++)
+                changed |= RefreshItemImages(Document.Items[i], key);
+        }
+        if (changed) InvalidateMeasure();
+    }
+
+    private bool RefreshItemImages(NoteItem item, string? filterKey = null)
+    {
+        bool changed = false;
+        for (int j = 0; j < item.Elements.Count; j++)
+        {
+            var el = item.Elements[j];
+            if (el.UnresolvedImageKey != null && (filterKey == null || el.UnresolvedImageKey == filterKey))
+            {
+                var bitmap = ResolveImageByKey(el.UnresolvedImageKey);
+                if (bitmap != null)
+                {
+                    var imgEl = ContentElement.CreateImage(bitmap);
+                    imgEl.ImageKey = el.UnresolvedImageKey;
+                    imgEl.ImageAltText = el.ImageAltText;
+                    item.Elements[j] = imgEl;
+                    changed = true;
+                }
+            }
+            else if (el.Type == ContentElementType.Image && el.ImageKey != null
+                     && (filterKey == null || el.ImageKey == filterKey))
+            {
+                var bitmap = ResolveImageByKey(el.ImageKey);
+                if (bitmap != null && !ReferenceEquals(el.Image, bitmap))
+                {
+                    el.Image = bitmap;
+                    el.ImageWidth = bitmap.PixelSize.Width;
+                    el.ImageHeight = bitmap.PixelSize.Height;
+                    changed = true;
+                }
+            }
+        }
+        return changed;
+    }
+
+    // ---- IsDirty ----
+
+    private void SetDirtyState(bool dirty)
+    {
+        if (SetAndRaise(IsDirtyProperty, ref _isDirty, dirty))
+            DirtyChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    private void UpdateDirtyState()
+    {
+        SetDirtyState(_changeGeneration != _cleanGeneration);
+    }
+
+    public void MarkClean()
+    {
+        _cleanGeneration = _changeGeneration;
+        SetDirtyState(false);
+    }
+
+    // ---- Text parsing ----
 
     public NoteItem ParseTextToItem(string text)
     {
@@ -1985,7 +2410,8 @@ public class NoteEditor : Control
             string altText = match.Groups[1].Value;
             string key = match.Groups[2].Value;
 
-            if (ImageStore.TryGetValue(key, out var bitmap))
+            var bitmap = ResolveImageByKey(key);
+            if (bitmap != null)
             {
                 var imgEl = ContentElement.CreateImage(bitmap);
                 imgEl.ImageKey = key;
@@ -1994,7 +2420,10 @@ public class NoteEditor : Control
             }
             else
             {
-                item.Elements.Add(ContentElement.CreateText(match.Value));
+                var placeholder = ContentElement.CreateText(match.Value);
+                placeholder.UnresolvedImageKey = key;
+                placeholder.ImageAltText = altText;
+                item.Elements.Add(placeholder);
             }
 
             lastEnd = match.Index + match.Length;
@@ -2017,6 +2446,11 @@ public class NoteEditor : Control
                 string alt = el.ImageAltText ?? "image";
                 sb.Append($"![{alt}]({key})");
             }
+            else if (el.UnresolvedImageKey != null)
+            {
+                string alt = el.ImageAltText ?? "image";
+                sb.Append($"![{alt}]({el.UnresolvedImageKey})");
+            }
             else
             {
                 sb.Append(el.Text);
@@ -2029,13 +2463,18 @@ public class NoteEditor : Control
     {
         if (bitmap == null) return "unknown";
 
-        foreach (var kvp in ImageStore)
+        foreach (var kvp in _imageCache)
+        {
+            if (ReferenceEquals(kvp.Value, bitmap)) return kvp.Key;
+        }
+
+        foreach (var kvp in _legacyImageStore)
         {
             if (ReferenceEquals(kvp.Value, bitmap)) return kvp.Key;
         }
 
         string key = $"img_{Guid.NewGuid():N}";
-        ImageStore[key] = bitmap;
+        _imageCache[key] = bitmap;
         return key;
     }
 
@@ -2059,13 +2498,13 @@ public class NoteEditor : Control
             SelectionAnchor = CursorPosition.Start;
         }
         InvalidateMeasure();
-        NotifyDocumentChanged();
+        NotifyDocumentChanged(ChangeKind.StructureChanged);
     }
 
     public void AddItem(string text)
     {
         Document.Items.Add(new NoteItem(text));
         InvalidateMeasure();
-        NotifyDocumentChanged();
+        NotifyDocumentChanged(ChangeKind.StructureChanged);
     }
 }

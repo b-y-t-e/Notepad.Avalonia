@@ -1,9 +1,9 @@
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
 
-namespace Notes.Avalonia.Model;
+namespace Notepad.Avalonia.Model;
 
-public class NoteItemData : INotifyPropertyChanged
+internal class NoteItemData : INotifyPropertyChanged
 {
     private string _text = string.Empty;
 

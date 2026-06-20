@@ -1,17 +1,17 @@
-# Notes.Avalonia
+# Notepad.Avalonia
 
-A custom rich-text note editor control for Avalonia UI with inline image pasting support.
+A single-note markdown editor control for Avalonia UI with inline image pasting support.
 
 ## Features
 
-- Rich text editing with multiple note lines
+- Markdown text editing for a single note
 - Inline image support (paste from clipboard or programmatic insert)
 - Full undo/redo with intelligent coalescing
 - Text selection (single and multi-line)
 - Clipboard integration (text + images)
 - Text wrapping
 - Light/Dark theme support
-- MVVM-ready via `Items` property binding
+- MVVM-ready via `MarkdownText` property binding
 
 ## Quick Start
 
@@ -19,32 +19,30 @@ A custom rich-text note editor control for Avalonia UI with inline image pasting
 var editor = new NoteEditor
 {
     DefaultFont = new FontFamily("Segoe UI"),
-    DefaultFontSize = 15
+    DefaultFontSize = 15,
+    MarkdownText = "Hello world\nSecond line with ![alt](imageKey)"
 };
-
-// Add notes programmatically
-editor.AddItem("My first note");
-editor.AddItem("Note with image — paste with Ctrl+V");
-
-// Insert image
-editor.InsertImageAtCaret(bitmap);
 ```
 
 ## MVVM Usage
 
+```xml
+<notepad:NoteEditor MarkdownText="{Binding MarkdownText}"
+                    Images="{Binding Images}" />
+```
+
 ```csharp
-var items = new ObservableCollection<NoteItemData>
+public class MyViewModel : INotifyPropertyChanged
 {
-    new("First note"),
-    new("Second note with ![alt](imageKey)")
-};
-editor.Items = items;
+    public string? MarkdownText { get; set; }
+    public ObservableCollection<ImageEntry> Images { get; } = new();
+}
 ```
 
 ## Installation
 
 ```
-dotnet add package Notes.Avalonia
+dotnet add package Notepad.Avalonia
 ```
 
 ## License

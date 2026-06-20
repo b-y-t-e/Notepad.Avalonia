@@ -1,8 +1,8 @@
 using global::Avalonia.Headless.NUnit;
 using NUnit.Framework;
-using Notes.Avalonia.Model;
+using Notepad.Avalonia.Model;
 
-namespace Notes.Avalonia.Tests;
+namespace Notepad.Avalonia.Tests;
 
 [TestFixture]
 public class DocumentModelTests

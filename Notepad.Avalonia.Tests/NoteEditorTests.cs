@@ -1240,12 +1240,15 @@ public class NoteEditorTests
     }
 
     [Test]
-    public void ParseMarkdownSkipsEmptyLines()
+    public void ParseMarkdownPreservesEmptyLines()
     {
         var items = NoteMarkdown.ParseMarkdown("First\n\n\nSecond\n");
-        Assert.That(items.Count, Is.EqualTo(2));
+        Assert.That(items.Count, Is.EqualTo(5));
         Assert.That(items[0].Text, Is.EqualTo("First"));
-        Assert.That(items[1].Text, Is.EqualTo("Second"));
+        Assert.That(items[1].Text, Is.EqualTo(string.Empty));
+        Assert.That(items[2].Text, Is.EqualTo(string.Empty));
+        Assert.That(items[3].Text, Is.EqualTo("Second"));
+        Assert.That(items[4].Text, Is.EqualTo(string.Empty));
     }
 
     // ---- IsDirty tests ----

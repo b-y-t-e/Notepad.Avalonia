@@ -13,7 +13,6 @@ internal static class NoteMarkdown
         foreach (var rawLine in markdown.Split('\n'))
         {
             var line = rawLine.TrimEnd('\r');
-            if (line.Length == 0) continue;
             result.Add(new NoteItemData(line));
         }
         return result;

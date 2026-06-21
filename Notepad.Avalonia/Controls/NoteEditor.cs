@@ -841,13 +841,8 @@ public class NoteEditor : Control
             var wLine = wrappedLines[li];
             bool isLastLine = li == wrappedLines.Count - 1;
 
-            bool nextStartsWithImage = !isLastLine
-                && wrappedLines[li + 1].Segments.Count > 0
-                && item.Elements[wrappedLines[li + 1].Segments[0].ElementIndex].Type == ContentElementType.Image;
-
-            if (globalOffset < wLine.EndGlobalOffset
-                || (isLastLine && globalOffset <= wLine.EndGlobalOffset)
-                || (globalOffset == wLine.EndGlobalOffset && nextStartsWithImage))
+            if (globalOffset <= wLine.EndGlobalOffset
+                || isLastLine)
             {
                 foreach (var seg in wLine.Segments)
                 {
@@ -914,8 +909,8 @@ public class NoteEditor : Control
         {
             var wLine = wrappedLines[li];
             bool isLastLine = li == wrappedLines.Count - 1;
-            if (globalOffset < wLine.EndGlobalOffset
-                || (isLastLine && globalOffset <= wLine.EndGlobalOffset))
+            if (globalOffset <= wLine.EndGlobalOffset
+                || isLastLine)
             {
                 return (wLine.StartGlobalOffset, wLine.EndGlobalOffset);
             }

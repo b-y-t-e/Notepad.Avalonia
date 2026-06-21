@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Publish Notes.Avalonia to NuGet.org.
+Publish Notepad.Avalonia to NuGet.org.
 
 Usage:
     python publish.py            # bump version, build, pack, push
@@ -23,7 +23,7 @@ from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).parent
 REPO_ROOT   = SCRIPT_DIR.parent
-CSPROJ      = REPO_ROOT / "Notes.Avalonia" / "Notes.Avalonia.csproj"
+CSPROJ      = REPO_ROOT / "Notepad.Avalonia" / "Notepad.Avalonia.csproj"
 ARTIFACTS   = REPO_ROOT / "artifacts"
 ENV_FILE    = SCRIPT_DIR / ".env"
 
@@ -76,7 +76,7 @@ def current_version(csproj: Path) -> str:
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
-    parser = argparse.ArgumentParser(description="Publish Notes.Avalonia to NuGet.org")
+    parser = argparse.ArgumentParser(description="Publish Notepad.Avalonia to NuGet.org")
     parser.add_argument("--dry-run",  action="store_true", help="Skip the push step")
     parser.add_argument("--no-bump",  action="store_true", help="Skip version bump")
     args = parser.parse_args()
@@ -103,9 +103,9 @@ def main():
     run(["dotnet", "pack", str(CSPROJ), "-c", "Release",
          "--no-build", "-o", str(ARTIFACTS)], cwd=REPO_ROOT)
 
-    nupkg = ARTIFACTS / f"Notes.Avalonia.{version}.nupkg"
+    nupkg = ARTIFACTS / f"Notepad.Avalonia.{version}.nupkg"
     if not nupkg.exists():
-        matches = list(ARTIFACTS.glob(f"Notes.Avalonia.{version}*.nupkg"))
+        matches = list(ARTIFACTS.glob(f"Notepad.Avalonia.{version}*.nupkg"))
         if not matches:
             print(f"ERROR: .nupkg not found in {ARTIFACTS}")
             sys.exit(1)
@@ -123,7 +123,7 @@ def main():
             "--source",   "https://api.nuget.org/v3/index.json",
             "--skip-duplicate",
         ], cwd=REPO_ROOT)
-        print(f"\nPublished Notes.Avalonia {version} to NuGet.org")
+        print(f"\nPublished Notepad.Avalonia {version} to NuGet.org")
 
 
 if __name__ == "__main__":

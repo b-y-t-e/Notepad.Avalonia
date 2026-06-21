@@ -12,6 +12,7 @@ A single-note markdown editor control for Avalonia UI with inline image pasting 
 - Text wrapping
 - Light/Dark theme support
 - MVVM-ready via `MarkdownText` property binding
+- Optimized for large documents (FormattedText caching, incremental layout, viewport culling)
 
 ## Quick Start
 

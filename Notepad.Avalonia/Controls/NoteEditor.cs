@@ -16,6 +16,7 @@ using global::Avalonia.Layout;
 using global::Avalonia.Input.Platform;
 using global::Avalonia.Media;
 using global::Avalonia.Media.Imaging;
+using global::Avalonia.Threading;
 using global::Avalonia.VisualTree;
 using Notepad.Avalonia.Model;
 
@@ -214,6 +215,7 @@ public class NoteEditor : Control
     private bool _syncingMarkdownText;
     private double _goalX = -1;
     private const int MaxCacheEntries = 4096;
+    private const int ResizeDebounceMs = 150;
     private readonly Dictionary<(string text, Typeface typeface, double fontSize), double> _measureCache = new();
     private readonly Dictionary<(string text, Typeface typeface, double fontSize), FormattedText> _fmtCache = new();
 
@@ -222,6 +224,8 @@ public class NoteEditor : Control
     private ScrollViewer? _parentScrollViewer;
     private double _viewportTop;
     private double _viewportBottom;
+    private bool _resizePending;
+    private DispatcherTimer? _resizeTimer;
 
     private void ClearTextCaches()
     {
@@ -347,6 +351,7 @@ public class NoteEditor : Control
 
     protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e)
     {
+        _resizeTimer?.Stop();
         if (_parentScrollViewer != null)
         {
             _parentScrollViewer.ScrollChanged -= OnParentScrollChanged;
@@ -583,6 +588,7 @@ public class NoteEditor : Control
         _itemWrapping.Clear();
         _dirtyItems.Clear();
         _fullLayoutRequired = false;
+        _resizePending = false;
 
         double availWidth = AvailableContentWidth;
         double y = EditorPadding.Top;
@@ -633,15 +639,18 @@ public class NoteEditor : Control
         double w = double.IsInfinity(availableSize.Width) ? 400 : availableSize.Width;
         double newWidth = Math.Max(w, 200);
 
-        if (_fullLayoutRequired || Math.Abs(newWidth - _desiredWidth) > 0.1
-            || _itemWrapping.Count != Document.Items.Count)
+        if (_fullLayoutRequired || _itemWrapping.Count != Document.Items.Count)
         {
             _desiredWidth = newWidth;
             ComputeLayout();
         }
-        else if (_dirtyItems.Count > 0)
+        else if (Math.Abs(newWidth - _desiredWidth) > 0.1)
         {
             _desiredWidth = newWidth;
+            ComputeViewportResizeLayout();
+        }
+        else if (_dirtyItems.Count > 0)
+        {
             ComputeIncrementalLayout();
         }
 
@@ -651,12 +660,62 @@ public class NoteEditor : Control
     protected override Size ArrangeOverride(Size finalSize)
     {
         double newWidth = Math.Max(finalSize.Width, 200);
-        if (_itemWrapping.Count == 0 || Math.Abs(newWidth - _desiredWidth) > 0.1)
+        if (_itemWrapping.Count == 0)
         {
             _desiredWidth = newWidth;
             ComputeLayout();
         }
+        else if (Math.Abs(newWidth - _desiredWidth) > 0.1)
+        {
+            _desiredWidth = newWidth;
+            ComputeViewportResizeLayout();
+        }
         return new Size(_desiredWidth, Math.Max(finalSize.Height, _desiredHeight));
+    }
+
+    private void ComputeViewportResizeLayout()
+    {
+        double availWidth = AvailableContentWidth;
+        var (first, last) = GetVisibleItemRange();
+
+        for (int i = first; i <= last && i < Document.Items.Count && i < _itemHeights.Count; i++)
+        {
+            double oldHeight = _itemHeights[i];
+            var wrappedLines = ComputeItemWrapping(Document.Items[i], availWidth);
+            _itemWrapping[i] = wrappedLines;
+            _itemHeights[i] = ComputeItemHeight(wrappedLines);
+            double delta = _itemHeights[i] - oldHeight;
+
+            if (Math.Abs(delta) > 0.001)
+            {
+                for (int j = i + 1; j < _itemYPositions.Count; j++)
+                    _itemYPositions[j] += delta;
+                _desiredHeight += delta;
+            }
+        }
+
+        ScheduleDeferredLayout();
+    }
+
+    private void ScheduleDeferredLayout()
+    {
+        _resizePending = true;
+        if (_resizeTimer == null)
+        {
+            _resizeTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(ResizeDebounceMs) };
+            _resizeTimer.Tick += OnResizeTimerTick;
+        }
+        _resizeTimer.Stop();
+        _resizeTimer.Start();
+    }
+
+    private void OnResizeTimerTick(object? sender, EventArgs e)
+    {
+        _resizeTimer?.Stop();
+        if (!_resizePending) return;
+        _resizePending = false;
+        _fullLayoutRequired = true;
+        InvalidateMeasure();
     }
 
     // ---- Rendering ----

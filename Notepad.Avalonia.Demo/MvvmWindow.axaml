@@ -18,16 +18,13 @@
                  Text="{Binding StatusText}" />
     </StackPanel>
 
-    <ScrollViewer HorizontalScrollBarVisibility="Disabled"
-                  VerticalScrollBarVisibility="Auto">
-      <notepad:NoteEditor DefaultFontSize="15"
-                          MarkdownText="{Binding MarkdownText}"
-                          Images="{Binding Images}">
-        <notepad:NoteEditor.DefaultFont>
-          <FontFamily>Segoe UI</FontFamily>
-        </notepad:NoteEditor.DefaultFont>
-      </notepad:NoteEditor>
-    </ScrollViewer>
+    <notepad:NoteEditor DefaultFontSize="15"
+                        MarkdownText="{Binding MarkdownText}"
+                        Images="{Binding Images}">
+      <notepad:NoteEditor.DefaultFont>
+        <FontFamily>Segoe UI</FontFamily>
+      </notepad:NoteEditor.DefaultFont>
+    </notepad:NoteEditor>
   </DockPanel>
 
 </Window>

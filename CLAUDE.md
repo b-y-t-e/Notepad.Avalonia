@@ -24,6 +24,11 @@ dotnet test Notepad.Avalonia.Tests
 - `ImagePasted` event — fires when user pastes an image
 - `ContentChanged` / `ContentDetailChanged` events — content change notifications
 
+## Layout
+
+- `NoteEditor` has a **built-in vertical scrollbar** and virtualizes its content. Give it a finite height (e.g. a `DockPanel`/`Grid` cell).
+- **Do not wrap it in an external `ScrollViewer`.** That gives the control an unbounded height, which disables both the built-in scrollbar and viewport virtualization (all items render every frame). This usage is not supported.
+
 ## Conventions
 
 - All code, comments, commit messages, branch names, PR descriptions, and UI strings must be in **English**, regardless of the language the user communicates in.

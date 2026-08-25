@@ -15,11 +15,23 @@ public class DemoViewModel : INotifyPropertyChanged
 {
     public ObservableCollection<ImageEntry> Images { get; } = new();
 
+    /// <summary>Source shown in the editable <c>NoteEditor</c> (raw markdown text).</summary>
     private string? _markdownText;
     public string? MarkdownText
     {
         get => _markdownText;
         set { if (_markdownText != value) { _markdownText = value; OnPropertyChanged(); UpdateStatus(); } }
+    }
+
+    /// <summary>
+    /// Independent source shown in the read-only <c>MarkdownViewer</c>. The editor
+    /// renders plain text, so the two panes deliberately hold different documents.
+    /// </summary>
+    private string? _previewMarkdownText;
+    public string? PreviewMarkdownText
+    {
+        get => _previewMarkdownText;
+        set { if (_previewMarkdownText != value) { _previewMarkdownText = value; OnPropertyChanged(); UpdateStatus(); } }
     }
 
     private string _statusText = "MVVM Demo — edit the note, changes sync with ViewModel.";
@@ -40,6 +52,7 @@ public class DemoViewModel : INotifyPropertyChanged
         Images.Add(new ImageEntry("check", CreateSolidBitmap(Colors.LimeGreen)));
 
         MarkdownText = GenerateGermanPinscherText();
+        PreviewMarkdownText = MarkdownShowcase.Build();
     }
 
     private static string GenerateGermanPinscherText()
@@ -1065,11 +1078,23 @@ public class DemoViewModel : INotifyPropertyChanged
         return bmp;
     }
 
+    /// <summary>Loads a large document covering every supported markdown construct into the preview.</summary>
+    public void PreviewMarkdownShowcase() => PreviewMarkdownText = MarkdownShowcase.Build();
+
+    /// <summary>Loads the long sample note (plain text with inline images) into the preview.</summary>
+    public void PreviewSampleNote() => PreviewMarkdownText = GenerateGermanPinscherText();
+
+    /// <summary>Copies the current editor content into the preview pane.</summary>
+    public void PreviewEditorText() => PreviewMarkdownText = MarkdownText;
+
     private void UpdateStatus()
     {
-        var lineCount = string.IsNullOrEmpty(_markdownText) ? 0 : _markdownText.Split('\n').Length;
-        StatusText = $"Lines: {lineCount}";
+        StatusText = $"Editor lines: {LineCount(_markdownText)}  |  "
+            + $"Preview lines: {LineCount(_previewMarkdownText)}";
     }
+
+    private static int LineCount(string? text) =>
+        string.IsNullOrEmpty(text) ? 0 : text.Split('\n').Length;
 
     public event PropertyChangedEventHandler? PropertyChanged;
 

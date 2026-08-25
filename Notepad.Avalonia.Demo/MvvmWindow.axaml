@@ -5,7 +5,7 @@
         x:Class="Notepad.Avalonia.Demo.MvvmWindow"
         x:DataType="local:DemoViewModel"
         Title="Notepad Editor — MVVM Demo"
-        Width="900" Height="600"
+        Width="1200" Height="750"
         WindowStartupLocation="CenterScreen">
 
   <Window.DataContext>
@@ -18,13 +18,40 @@
                  Text="{Binding StatusText}" />
     </StackPanel>
 
-    <notepad:NoteEditor DefaultFontSize="15"
-                        MarkdownText="{Binding MarkdownText}"
-                        Images="{Binding Images}">
-      <notepad:NoteEditor.DefaultFont>
-        <FontFamily>Segoe UI</FontFamily>
-      </notepad:NoteEditor.DefaultFont>
-    </notepad:NoteEditor>
+    <Grid ColumnDefinitions="*,4,*">
+      <!-- Left: editable markdown source. Shows the raw text, no formatting. -->
+      <DockPanel Grid.Column="0">
+        <TextBlock DockPanel.Dock="Top" Margin="8,6" FontSize="12" Foreground="Gray"
+                   Text="NoteEditor — editable source (raw markdown, inline images)" />
+        <notepad:NoteEditor DefaultFontSize="15"
+                            MarkdownText="{Binding MarkdownText}"
+                            Images="{Binding Images}">
+          <notepad:NoteEditor.DefaultFont>
+            <FontFamily>Segoe UI</FontFamily>
+          </notepad:NoteEditor.DefaultFont>
+        </notepad:NoteEditor>
+      </DockPanel>
+
+      <GridSplitter Grid.Column="1" Background="#20000000" />
+
+      <!-- Right: independent document, rendered read-only. Selectable, Ctrl+C to copy. -->
+      <DockPanel Grid.Column="2">
+        <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="8,4" Spacing="6">
+          <TextBlock VerticalAlignment="Center" FontSize="12" Foreground="Gray"
+                     Text="MarkdownViewer — rendered, read-only:" />
+          <Button Name="ShowcaseButton" Content="Showcase" />
+          <Button Name="SampleNoteButton" Content="Sample note" />
+          <Button Name="EditorTextButton" Content="Editor text" />
+        </StackPanel>
+        <notepad:MarkdownViewer DefaultFontSize="15"
+                                MarkdownText="{Binding PreviewMarkdownText}"
+                                Images="{Binding Images}">
+          <notepad:MarkdownViewer.DefaultFont>
+            <FontFamily>Segoe UI</FontFamily>
+          </notepad:MarkdownViewer.DefaultFont>
+        </notepad:MarkdownViewer>
+      </DockPanel>
+    </Grid>
   </DockPanel>
 
 </Window>

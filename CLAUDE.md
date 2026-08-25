@@ -25,6 +25,7 @@ dotnet test Notepad.Avalonia.Tests
 - `IsDirty` / `DirtyChanged` / `MarkClean()` — dirty tracking
 - `ImagePasted` event — fires when user pastes an image
 - `ContentChanged` / `ContentDetailChanged` events — content change notifications
+- `ClearSelectionOnLostFocus` (default true, as in Avalonia's `TextBox`) / `InactiveSelectionBrush`; the caret is drawn only while focused
 
 ### MarkdownViewer
 
@@ -35,12 +36,14 @@ lists, tasks, quotes, code, tables, links, images), free text selection
 - `MarkdownText` / `Images` — same binding contract as `NoteEditor`
 - `PlainText` / `SelectedText` / `SelectAll()` / `CopySelection()` — selection offsets index into `PlainText`
 - `LinkClicked` / `SelectionChanged` events
+- `ClearSelectionOnLostFocus` (default true, as in Avalonia's `TextBox`) / `InactiveSelectionBrush`
 - `MarkdownParser.Parse(...)` is public if you need the block model without the control
 
 ## Layout
 
 - `NoteEditor` and `MarkdownViewer` have a **built-in vertical scrollbar** and virtualize their content. Give them a finite height (e.g. a `DockPanel`/`Grid` cell).
-- **Do not wrap them in an external `ScrollViewer`.** That gives the control an unbounded height, which disables both the built-in scrollbar and viewport virtualization (all items render every frame). This usage is not supported.
+- Both suppress the focus-driven bring-into-view for **pointer** focus, so clicking to select inside an outer scroll area does not make it jump; `Tab` navigation still scrolls them into view. The framework focuses on pointer press *before* `PointerPressed` reaches the control (`GotFocus` -> `RequestBringIntoView` -> `PointerPressed`), so the suppression hangs off `OnGotFocus`, not off the `Focus()` call.
+- Wrapping them in an external `ScrollViewer` gives them an unbounded height: the built-in scrollbar and viewport virtualization are disabled and every block renders each frame. That is the supported way to stack several notes in one scroll area, but a single long document should get a finite height instead.
 
 ## Conventions
 

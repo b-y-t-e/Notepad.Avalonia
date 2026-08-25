@@ -23,3 +23,6 @@ Deploy/.env
 # OS
 .DS_Store
 Thumbs.db
+
+# Scratch directory of the mterminal tool
+.mterminal/

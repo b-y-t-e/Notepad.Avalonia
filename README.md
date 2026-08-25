@@ -13,7 +13,9 @@ Two Avalonia UI controls for a single markdown note:
 - Markdown text editing for a single note
 - Inline image support (paste from clipboard or programmatic insert)
 - Full undo/redo with intelligent coalescing
-- Text selection (single and multi-line)
+- Text selection (single and multi-line); dropped on lost focus like Avalonia's
+  `TextBox`, with `ClearSelectionOnLostFocus` / `InactiveSelectionBrush` to opt out
+- Caret shown only while the control has focus
 - Clipboard integration (text + images)
 - Text wrapping
 - Light/Dark theme support
@@ -32,7 +34,9 @@ character can be selected and copied.
   links (inline, reference and autolinks), images, hard line breaks, backslash
   escapes and HTML entities
 - Selection: drag, Shift+click, double-click (word), triple-click (line),
-  `Ctrl+A`, auto-scroll while dragging past the edge
+  `Ctrl+A`, auto-scroll while dragging past the edge. The selection is dropped on
+  lost focus (like Avalonia's `TextBox`); set `ClearSelectionOnLostFocus="False"`
+  to keep it — it is then drawn with `InactiveSelectionBrush`
 - Copy: `Ctrl+C` / context menu — copies the rendered text, not the markup
 - Links: `LinkClicked` event, opens http/https/mailto in the browser by default
 - Built-in scrollbar with viewport virtualization and light/dark themes
@@ -59,8 +63,20 @@ viewer.SelectAll();
 var text = viewer.SelectedText;   // rendered text, without the markup
 ```
 
-Give the viewer a finite height (a `DockPanel`/`Grid` cell); like `NoteEditor` it
-scrolls its own content, so do **not** wrap it in a `ScrollViewer`.
+### Scrolling
+
+Both controls scroll their own content. Give them a finite height (a
+`DockPanel`/`Grid` cell) and they show a scrollbar and render only the visible
+blocks.
+
+Given an **unbounded** height — the usual case being an outer `ScrollViewer` —
+they instead report their full content height and render every block, so the
+outer container does the scrolling. That is the supported way to stack several
+notes in one scroll area, at the cost of the built-in scrollbar and
+virtualization; prefer a finite height for a single long document.
+
+Either way, clicking to select never makes an enclosing `ScrollViewer` jump,
+while `Tab` navigation still scrolls the control into view.
 
 ## MVVM Usage
 

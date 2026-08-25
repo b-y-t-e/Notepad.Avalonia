@@ -69,6 +69,13 @@ public class NoteEditor : Control
         AvaloniaProperty.Register<NoteEditor, IBrush>(nameof(SelectionBrush),
             new SolidColorBrush(Color.FromArgb(80, 30, 144, 255)));
 
+    public static readonly StyledProperty<IBrush> InactiveSelectionBrushProperty =
+        AvaloniaProperty.Register<NoteEditor, IBrush>(nameof(InactiveSelectionBrush),
+            new SolidColorBrush(Color.FromArgb(60, 130, 130, 130)));
+
+    public static readonly StyledProperty<bool> ClearSelectionOnLostFocusProperty =
+        AvaloniaProperty.Register<NoteEditor, bool>(nameof(ClearSelectionOnLostFocus), true);
+
     public static readonly StyledProperty<IBrush> CaretBrushProperty =
         AvaloniaProperty.Register<NoteEditor, IBrush>(nameof(CaretBrush), Brushes.Black);
 
@@ -154,6 +161,25 @@ public class NoteEditor : Control
     {
         get => GetValue(SelectionBrushProperty);
         set => SetValue(SelectionBrushProperty, value);
+    }
+
+    /// <summary>Highlight used while the control does not have focus.</summary>
+    public IBrush InactiveSelectionBrush
+    {
+        get => GetValue(InactiveSelectionBrushProperty);
+        set => SetValue(InactiveSelectionBrushProperty, value);
+    }
+
+    /// <summary>
+    /// Collapses the selection when the control loses focus, matching Avalonia's
+    /// <c>TextBox</c>. Set to false to keep it, which is then drawn with
+    /// <see cref="InactiveSelectionBrush"/> — useful when an external toolbar
+    /// acts on the selection.
+    /// </summary>
+    public bool ClearSelectionOnLostFocus
+    {
+        get => GetValue(ClearSelectionOnLostFocusProperty);
+        set => SetValue(ClearSelectionOnLostFocusProperty, value);
     }
 
     public IBrush CaretBrush
@@ -246,6 +272,7 @@ public class NoteEditor : Control
     private bool _syncingFontProperties;
     private bool _syncingMarkdownText;
     private double _goalX = -1;
+    private bool _suppressBringIntoView;
     private const int MaxCacheEntries = 4096;
     private const int ResizeDebounceMs = 150;
     private readonly Dictionary<(string text, Typeface typeface, double fontSize), double> _measureCache = new();
@@ -385,6 +412,50 @@ public class NoteEditor : Control
         IsTabStop = true;
         ClipToBounds = true;
         SyncDocumentDefaults();
+        AddHandler(RequestBringIntoViewEvent, OnRequestBringIntoView);
+    }
+
+    // An enclosing ScrollViewer answers a focus change by scrolling the focused
+    // control into view, and the request covers the WHOLE control — for a long
+    // document that drags the text out from under the pointer, so a click meant to
+    // start a selection lands somewhere else. Only pointer focus is suppressed;
+    // Tab navigation must still scroll the control into view.
+    //
+    // The framework focuses on pointer press before PointerPressed reaches us
+    // (GotFocus -> RequestBringIntoView -> PointerPressed) and the request is
+    // raised while the focus event is still bubbling, so the flag only has to
+    // survive that. Dropping it on the next dispatcher turn keeps the window
+    // narrow enough that a BringIntoView() the host calls later still works.
+    private void SuppressBringIntoViewForThisFocusChange()
+    {
+        _suppressBringIntoView = true;
+        Dispatcher.UIThread.Post(() => _suppressBringIntoView = false, DispatcherPriority.Input);
+    }
+
+    private void OnRequestBringIntoView(object? sender, RequestBringIntoViewEventArgs e)
+    {
+        if (_suppressBringIntoView && ReferenceEquals(e.TargetObject, this))
+            e.Handled = true;
+    }
+
+    protected override void OnGotFocus(FocusChangedEventArgs e)
+    {
+        base.OnGotFocus(e);
+        if (e.NavigationMethod == NavigationMethod.Pointer)
+            SuppressBringIntoViewForThisFocusChange();
+        InvalidateVisual();
+    }
+
+    protected override void OnLostFocus(FocusChangedEventArgs e)
+    {
+        base.OnLostFocus(e);
+
+        // A context menu supplied by the host takes focus while it is open;
+        // clearing the selection here would leave its commands nothing to act on.
+        if (ClearSelectionOnLostFocus && HasSelection && ContextMenu?.IsOpen != true)
+            ClearSelectionNoDelete();
+
+        InvalidateVisual();
     }
 
     protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e)
@@ -593,6 +664,7 @@ public class NoteEditor : Control
             BackgroundBrush = Brushes.White;
             Foreground = Brushes.Black;
             SelectionBrush = new SolidColorBrush(Color.FromArgb(80, 30, 144, 255));
+            InactiveSelectionBrush = new SolidColorBrush(Color.FromArgb(60, 130, 130, 130));
             CaretBrush = Brushes.Black;
             ScrollTrackBrush = new SolidColorBrush(Color.FromArgb(24, 0, 0, 0));
             ScrollThumbBrush = new SolidColorBrush(Color.FromArgb(96, 0, 0, 0));
@@ -602,6 +674,7 @@ public class NoteEditor : Control
             BackgroundBrush = new SolidColorBrush(Color.FromRgb(30, 30, 30));
             Foreground = new SolidColorBrush(Color.FromRgb(220, 220, 220));
             SelectionBrush = new SolidColorBrush(Color.FromArgb(80, 60, 140, 230));
+            InactiveSelectionBrush = new SolidColorBrush(Color.FromArgb(70, 150, 150, 150));
             CaretBrush = Brushes.White;
             ScrollTrackBrush = new SolidColorBrush(Color.FromArgb(28, 255, 255, 255));
             ScrollThumbBrush = new SolidColorBrush(Color.FromArgb(120, 255, 255, 255));
@@ -831,7 +904,7 @@ public class NoteEditor : Control
         var (firstVisible, lastVisible) = GetVisibleItemRange();
 
         var (selFirst, selLast) = CurrentSelection.Ordered();
-        var selBrush = SelectionBrush;
+        var selBrush = IsFocused ? SelectionBrush : InactiveSelectionBrush;
 
         // Content is translated by the scroll offset; the scrollbar (drawn after)
         // stays in viewport coordinates. using() keeps the push exception-safe.
@@ -852,7 +925,7 @@ public class NoteEditor : Control
 
             if (item.Elements.Count == 0)
             {
-                if (i == Caret.ItemIndex && !HasSelection)
+                if (i == Caret.ItemIndex && !HasSelection && IsFocused)
                     context.FillRectangle(CaretBrush,
                         new Rect(EditorPadding.Left, itemY, 1.5, Document.DefaultFontSize + 4));
                 continue;
@@ -912,7 +985,7 @@ public class NoteEditor : Control
                 }
             }
 
-            if (i == Caret.ItemIndex && !HasSelection)
+            if (i == Caret.ItemIndex && !HasSelection && IsFocused)
             {
                 var (caretX, caretYOff, caretLineH) = CalculateCaretPosition(i, Caret.Offset);
                 context.FillRectangle(CaretBrush,
@@ -1333,7 +1406,7 @@ public class NoteEditor : Control
             return;
         }
 
-        Focus();
+        Focus(NavigationMethod.Pointer);
         _goalX = -1;
 
         var cursor = HitTestCursor(pos);

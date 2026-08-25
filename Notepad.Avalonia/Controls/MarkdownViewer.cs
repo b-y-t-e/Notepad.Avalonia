@@ -9,6 +9,7 @@ using global::Avalonia;
 using global::Avalonia.Controls;
 using global::Avalonia.Input;
 using global::Avalonia.Input.Platform;
+using global::Avalonia.Interactivity;
 using global::Avalonia.Media;
 using global::Avalonia.Media.Imaging;
 using global::Avalonia.Threading;
@@ -80,6 +81,13 @@ public class MarkdownViewer : Control
     public static readonly StyledProperty<IBrush> SelectionBrushProperty =
         AvaloniaProperty.Register<MarkdownViewer, IBrush>(nameof(SelectionBrush),
             new SolidColorBrush(Color.FromArgb(80, 30, 144, 255)));
+
+    public static readonly StyledProperty<IBrush> InactiveSelectionBrushProperty =
+        AvaloniaProperty.Register<MarkdownViewer, IBrush>(nameof(InactiveSelectionBrush),
+            new SolidColorBrush(Color.FromArgb(60, 130, 130, 130)));
+
+    public static readonly StyledProperty<bool> ClearSelectionOnLostFocusProperty =
+        AvaloniaProperty.Register<MarkdownViewer, bool>(nameof(ClearSelectionOnLostFocus), true);
 
     public static readonly StyledProperty<IBrush> ScrollTrackBrushProperty =
         AvaloniaProperty.Register<MarkdownViewer, IBrush>(nameof(ScrollTrackBrush),
@@ -201,6 +209,24 @@ public class MarkdownViewer : Control
     {
         get => GetValue(SelectionBrushProperty);
         set => SetValue(SelectionBrushProperty, value);
+    }
+
+    /// <summary>Highlight used while the control does not have focus.</summary>
+    public IBrush InactiveSelectionBrush
+    {
+        get => GetValue(InactiveSelectionBrushProperty);
+        set => SetValue(InactiveSelectionBrushProperty, value);
+    }
+
+    /// <summary>
+    /// Drops the selection when the control loses focus, matching Avalonia's
+    /// <c>TextBox</c> and <c>SelectableTextBlock</c>. Set to false to keep the
+    /// selection, which is then drawn with <see cref="InactiveSelectionBrush"/>.
+    /// </summary>
+    public bool ClearSelectionOnLostFocus
+    {
+        get => GetValue(ClearSelectionOnLostFocusProperty);
+        set => SetValue(ClearSelectionOnLostFocusProperty, value);
     }
 
     public IBrush ScrollTrackBrush
@@ -379,6 +405,7 @@ public class MarkdownViewer : Control
     private int _selectionStart;
     private int _selectionEnd;
     private bool _mouseSelecting;
+    private bool _suppressBringIntoView;
     private Point _pressPoint;
     private string? _pressedLink;
     private int _selectMode; // 0 = char, 1 = word, 2 = line
@@ -394,6 +421,50 @@ public class MarkdownViewer : Control
         ClipToBounds = true;
         ApplyTheme(ColorTheme);
         BuildContextMenu();
+        AddHandler(RequestBringIntoViewEvent, OnRequestBringIntoView);
+    }
+
+    // An enclosing ScrollViewer answers a focus change by scrolling the focused
+    // control into view, and the request covers the WHOLE control — for a long
+    // document that drags the text out from under the pointer, so a click meant to
+    // start a selection lands somewhere else. Only pointer focus is suppressed;
+    // Tab navigation must still scroll the control into view.
+    //
+    // The framework focuses on pointer press before PointerPressed reaches us
+    // (GotFocus -> RequestBringIntoView -> PointerPressed) and the request is
+    // raised while the focus event is still bubbling, so the flag only has to
+    // survive that. Dropping it on the next dispatcher turn keeps the window
+    // narrow enough that a BringIntoView() the host calls later still works.
+    private void SuppressBringIntoViewForThisFocusChange()
+    {
+        _suppressBringIntoView = true;
+        Dispatcher.UIThread.Post(() => _suppressBringIntoView = false, DispatcherPriority.Input);
+    }
+
+    private void OnRequestBringIntoView(object? sender, RequestBringIntoViewEventArgs e)
+    {
+        if (_suppressBringIntoView && ReferenceEquals(e.TargetObject, this))
+            e.Handled = true;
+    }
+
+    protected override void OnGotFocus(FocusChangedEventArgs e)
+    {
+        base.OnGotFocus(e);
+        if (e.NavigationMethod == NavigationMethod.Pointer)
+            SuppressBringIntoViewForThisFocusChange();
+        InvalidateVisual();
+    }
+
+    protected override void OnLostFocus(FocusChangedEventArgs e)
+    {
+        base.OnLostFocus(e);
+
+        // The context menu takes focus while it is open; clearing the selection
+        // here would leave its Copy command nothing to copy.
+        if (ClearSelectionOnLostFocus && HasSelection && ContextMenu?.IsOpen != true)
+            ClearSelection();
+
+        InvalidateVisual();
     }
 
     // ---- Public API ----
@@ -430,7 +501,12 @@ public class MarkdownViewer : Control
         _selectionAnchor = 0;
     }
 
-    public void ClearSelection() => SetSelection(0, 0);
+    /// <summary>Drops the selection and the anchor a Shift+click would extend from.</summary>
+    public void ClearSelection()
+    {
+        _selectionAnchor = 0;
+        SetSelection(0, 0);
+    }
 
     /// <summary>Copies the selection (or the whole document when nothing is selected) to the clipboard.</summary>
     public void CopySelection()
@@ -524,11 +600,17 @@ public class MarkdownViewer : Control
             || change.Property == BackgroundBrushProperty
             || change.Property == CodeBackgroundProperty
             || change.Property == RuleBrushProperty
-            || change.Property == QuoteBarBrushProperty
-            || change.Property == SelectionBrushProperty)
+            || change.Property == QuoteBarBrushProperty)
         {
             _fmtCache.Clear();
             InvalidateLayout();
+            return;
+        }
+
+        if (change.Property == SelectionBrushProperty
+            || change.Property == InactiveSelectionBrushProperty)
+        {
+            InvalidateVisual();
         }
     }
 
@@ -563,6 +645,7 @@ public class MarkdownViewer : Control
             RuleBrush = new SolidColorBrush(Color.FromArgb(60, 0, 0, 0));
             QuoteBarBrush = new SolidColorBrush(Color.FromRgb(208, 215, 222));
             SelectionBrush = new SolidColorBrush(Color.FromArgb(80, 30, 144, 255));
+            InactiveSelectionBrush = new SolidColorBrush(Color.FromArgb(60, 130, 130, 130));
             ScrollTrackBrush = new SolidColorBrush(Color.FromArgb(24, 0, 0, 0));
             ScrollThumbBrush = new SolidColorBrush(Color.FromArgb(96, 0, 0, 0));
         }
@@ -576,6 +659,7 @@ public class MarkdownViewer : Control
             RuleBrush = new SolidColorBrush(Color.FromArgb(70, 255, 255, 255));
             QuoteBarBrush = new SolidColorBrush(Color.FromRgb(80, 86, 94));
             SelectionBrush = new SolidColorBrush(Color.FromArgb(80, 60, 140, 230));
+            InactiveSelectionBrush = new SolidColorBrush(Color.FromArgb(70, 150, 150, 150));
             ScrollTrackBrush = new SolidColorBrush(Color.FromArgb(28, 255, 255, 255));
             ScrollThumbBrush = new SolidColorBrush(Color.FromArgb(120, 255, 255, 255));
         }
@@ -1492,7 +1576,7 @@ public class MarkdownViewer : Control
         double bottom = _offset + (_viewportHeight > 0 ? _viewportHeight : _desiredHeight);
 
         var (first, last) = GetVisibleBlockRange(top, bottom);
-        var selectionBrush = SelectionBrush;
+        var selectionBrush = IsFocused ? SelectionBrush : InactiveSelectionBrush;
 
         for (int i = first; i <= last && i < _blocks.Count; i++)
         {
@@ -1501,7 +1585,13 @@ public class MarkdownViewer : Control
 
             foreach (var line in block.Lines)
             {
+                // Run backgrounds (inline code) go first so the selection
+                // highlight stays visible on top of them.
+                foreach (var run in line.Runs)
+                    RenderRunBackground(context, line, run);
+
                 RenderSelection(context, line, selectionBrush);
+
                 foreach (var run in line.Runs)
                     RenderRun(context, line, run);
             }
@@ -1594,6 +1684,13 @@ public class MarkdownViewer : Control
             context.FillRectangle(brush, new Rect(line.Right, line.Y, DefaultFontSize * 0.4, line.Height));
     }
 
+    private void RenderRunBackground(DrawingContext context, VisualLine line, VisualRun run)
+    {
+        if (!run.IsCode || run.Text.Length == 0) return;
+        double y = line.Y + line.Baseline - run.Baseline;
+        context.FillRectangle(CodeBackground, new Rect(run.X - 1, y, run.Width + 2, run.Height), 3);
+    }
+
     private void RenderRun(DrawingContext context, VisualLine line, VisualRun run)
     {
         if (run.Image != null)
@@ -1606,12 +1703,6 @@ public class MarkdownViewer : Control
         if (run.Text.Length == 0) return;
 
         double y = line.Y + line.Baseline - run.Baseline;
-
-        if (run.IsCode)
-        {
-            context.FillRectangle(CodeBackground,
-                new Rect(run.X - 1, y, run.Width + 2, run.Height), 3);
-        }
 
         var fmt = GetFormatted(run.Text, run.Typeface, run.FontSize, run.Brush);
         context.DrawText(fmt, new Point(run.X, y));
@@ -1787,7 +1878,7 @@ public class MarkdownViewer : Control
 
         if (!e.GetCurrentPoint(this).Properties.IsLeftButtonPressed) return;
 
-        Focus();
+        Focus(NavigationMethod.Pointer);
         _pressPoint = point;
         _pressedLink = RunAtPoint(point)?.LinkUrl;
 

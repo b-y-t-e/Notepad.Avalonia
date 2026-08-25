@@ -623,6 +623,7 @@ public class NoteEditor : Control
         else if (change.Property == BackgroundBrushProperty
             || change.Property == ForegroundProperty
             || change.Property == SelectionBrushProperty
+            || change.Property == InactiveSelectionBrushProperty
             || change.Property == CaretBrushProperty
             || change.Property == ScrollTrackBrushProperty
             || change.Property == ScrollThumbBrushProperty)

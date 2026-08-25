@@ -37,13 +37,15 @@ lists, tasks, quotes, code, tables, links, images), free text selection
 - `PlainText` / `SelectedText` / `SelectAll()` / `CopySelection()` — selection offsets index into `PlainText`
 - `LinkClicked` / `SelectionChanged` events
 - `ClearSelectionOnLostFocus` (default true, as in Avalonia's `TextBox`) / `InactiveSelectionBrush`
+- Copy falls back to the whole document when nothing is selected — a focusable host toolbar button therefore turns "copy selection" into "copy everything"
 - `MarkdownParser.Parse(...)` is public if you need the block model without the control
 
 ## Layout
 
 - `NoteEditor` and `MarkdownViewer` have a **built-in vertical scrollbar** and virtualize their content. Give them a finite height (e.g. a `DockPanel`/`Grid` cell).
 - Both suppress the focus-driven bring-into-view for **pointer** focus, so clicking to select inside an outer scroll area does not make it jump; `Tab` navigation still scrolls them into view. The framework focuses on pointer press *before* `PointerPressed` reaches the control (`GotFocus` -> `RequestBringIntoView` -> `PointerPressed`), so the suppression hangs off `OnGotFocus`, not off the `Focus()` call.
-- Wrapping them in an external `ScrollViewer` gives them an unbounded height: the built-in scrollbar and viewport virtualization are disabled and every block renders each frame. That is the supported way to stack several notes in one scroll area, but a single long document should get a finite height instead.
+- `FocusSelectionBehavior` holds the focus plumbing shared by both controls: dropping the selection on lost focus (deferred while a context menu is open, finished on its `Closed`) and the bring-into-view suppression. Clearing is posted at `DispatcherPriority.Input`, so a menu command that runs synchronously around the close still sees the selection it was invoked on. It subscribes to the menu only between `OnAttachedToVisualTree` and `OnDetachedFromVisualTree`, so a menu shared by the host cannot keep a detached control alive; a shared menu notifies every owner on close, and each acts only on its own focus state.
+- Wrapping them in an external `ScrollViewer` gives them an unbounded height: the built-in scrollbar and viewport virtualization are disabled and every block renders each frame. That is the supported way to stack several notes in one scroll area, but a single long document should get a finite height instead. In that mode dragging a selection past the edge does not auto-scroll.
 
 ## Conventions
 

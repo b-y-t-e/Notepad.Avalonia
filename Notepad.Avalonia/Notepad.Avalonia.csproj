@@ -7,7 +7,7 @@
 
     <!-- NuGet package metadata -->
     <PackageId>Notepad.Avalonia</PackageId>
-    <Version>0.3.0</Version>
+    <Version>0.3.1</Version>
     <Title>Notepad.Avalonia</Title>
     <Authors>b-y-t-e</Authors>
     <Description>Two markdown note controls for Avalonia UI: NoteEditor, a rich-text editor with inline image pasting, undo/redo, text selection, clipboard support and MVVM binding; and MarkdownViewer, a read-only renderer with full markdown support (headings, lists, tasks, quotes, code, tables, links, images), free text selection and copy.</Description>

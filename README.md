@@ -78,6 +78,25 @@ virtualization; prefer a finite height for a single long document.
 Either way, clicking to select never makes an enclosing `ScrollViewer` jump,
 while `Tab` navigation still scrolls the control into view.
 
+One thing the unbounded mode does not do: dragging a selection past the top or
+bottom edge does not auto-scroll, because that is driven by the built-in
+scrollbar. Scroll the outer container yourself and Shift+click to extend, or
+give the control a finite height.
+
+### Copying from your own toolbar
+
+`CopySelection()` (and `NoteEditor.CopyToClipboard()`) fall back to the whole
+document when nothing is selected. Since the selection is dropped on lost focus,
+a toolbar button that takes focus will silently turn "copy selection" into "copy
+everything". Either make the button non-focusable:
+
+```xml
+<Button Content="Copy" Focusable="False" Click="OnCopy" />
+```
+
+or keep the selection across focus changes with
+`ClearSelectionOnLostFocus="False"`.
+
 ## MVVM Usage
 
 ```xml

@@ -405,7 +405,7 @@ public class MarkdownViewer : Control
     private int _selectionStart;
     private int _selectionEnd;
     private bool _mouseSelecting;
-    private bool _suppressBringIntoView;
+    private readonly FocusSelectionBehavior _focusBehavior;
     private Point _pressPoint;
     private string? _pressedLink;
     private int _selectMode; // 0 = char, 1 = word, 2 = line
@@ -416,54 +416,36 @@ public class MarkdownViewer : Control
 
     public MarkdownViewer()
     {
+        // Created first: the property system can raise OnPropertyChanged while the
+        // rest of the constructor runs (BuildContextMenu below does exactly that).
+        _focusBehavior = new FocusSelectionBehavior(this,
+            () => ClearSelectionOnLostFocus && HasSelection,
+            ClearSelection);
+
         Focusable = true;
         IsTabStop = true;
         ClipToBounds = true;
         ApplyTheme(ColorTheme);
         BuildContextMenu();
-        AddHandler(RequestBringIntoViewEvent, OnRequestBringIntoView);
     }
 
-    // An enclosing ScrollViewer answers a focus change by scrolling the focused
-    // control into view, and the request covers the WHOLE control — for a long
-    // document that drags the text out from under the pointer, so a click meant to
-    // start a selection lands somewhere else. Only pointer focus is suppressed;
-    // Tab navigation must still scroll the control into view.
-    //
-    // The framework focuses on pointer press before PointerPressed reaches us
-    // (GotFocus -> RequestBringIntoView -> PointerPressed) and the request is
-    // raised while the focus event is still bubbling, so the flag only has to
-    // survive that. Dropping it on the next dispatcher turn keeps the window
-    // narrow enough that a BringIntoView() the host calls later still works.
-    private void SuppressBringIntoViewForThisFocusChange()
+    protected override void OnAttachedToVisualTree(VisualTreeAttachmentEventArgs e)
     {
-        _suppressBringIntoView = true;
-        Dispatcher.UIThread.Post(() => _suppressBringIntoView = false, DispatcherPriority.Input);
-    }
-
-    private void OnRequestBringIntoView(object? sender, RequestBringIntoViewEventArgs e)
-    {
-        if (_suppressBringIntoView && ReferenceEquals(e.TargetObject, this))
-            e.Handled = true;
+        base.OnAttachedToVisualTree(e);
+        _focusBehavior.Attach();
     }
 
     protected override void OnGotFocus(FocusChangedEventArgs e)
     {
         base.OnGotFocus(e);
-        if (e.NavigationMethod == NavigationMethod.Pointer)
-            SuppressBringIntoViewForThisFocusChange();
+        _focusBehavior.HandleGotFocus(e);
         InvalidateVisual();
     }
 
     protected override void OnLostFocus(FocusChangedEventArgs e)
     {
         base.OnLostFocus(e);
-
-        // The context menu takes focus while it is open; clearing the selection
-        // here would leave its Copy command nothing to copy.
-        if (ClearSelectionOnLostFocus && HasSelection && ContextMenu?.IsOpen != true)
-            ClearSelection();
-
+        _focusBehavior.HandleLostFocus();
         InvalidateVisual();
     }
 
@@ -562,6 +544,12 @@ public class MarkdownViewer : Control
         if (change.Property == ColorThemeProperty)
         {
             ApplyTheme(change.GetNewValue<EditorTheme>());
+            return;
+        }
+
+        if (change.Property == ContextMenuProperty)
+        {
+            _focusBehavior?.HandleContextMenuChanged(change.NewValue as ContextMenu);
             return;
         }
 
@@ -669,6 +657,7 @@ public class MarkdownViewer : Control
 
     protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e)
     {
+        _focusBehavior.Detach();
         StopAutoScroll();
         UnsubscribeImages(Images);
         base.OnDetachedFromVisualTree(e);

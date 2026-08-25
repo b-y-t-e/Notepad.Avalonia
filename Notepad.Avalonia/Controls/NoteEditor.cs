@@ -272,7 +272,7 @@ public class NoteEditor : Control
     private bool _syncingFontProperties;
     private bool _syncingMarkdownText;
     private double _goalX = -1;
-    private bool _suppressBringIntoView;
+    private readonly FocusSelectionBehavior _focusBehavior;
     private const int MaxCacheEntries = 4096;
     private const int ResizeDebounceMs = 150;
     private readonly Dictionary<(string text, Typeface typeface, double fontSize), double> _measureCache = new();
@@ -408,58 +408,41 @@ public class NoteEditor : Control
 
     public NoteEditor()
     {
+        // Created first: the property system can raise OnPropertyChanged while the
+        // rest of the constructor runs.
+        _focusBehavior = new FocusSelectionBehavior(this,
+            () => ClearSelectionOnLostFocus && HasSelection,
+            () => { ClearSelectionNoDelete(); InvalidateVisual(); });
+
         Focusable = true;
         IsTabStop = true;
         ClipToBounds = true;
         SyncDocumentDefaults();
-        AddHandler(RequestBringIntoViewEvent, OnRequestBringIntoView);
     }
 
-    // An enclosing ScrollViewer answers a focus change by scrolling the focused
-    // control into view, and the request covers the WHOLE control — for a long
-    // document that drags the text out from under the pointer, so a click meant to
-    // start a selection lands somewhere else. Only pointer focus is suppressed;
-    // Tab navigation must still scroll the control into view.
-    //
-    // The framework focuses on pointer press before PointerPressed reaches us
-    // (GotFocus -> RequestBringIntoView -> PointerPressed) and the request is
-    // raised while the focus event is still bubbling, so the flag only has to
-    // survive that. Dropping it on the next dispatcher turn keeps the window
-    // narrow enough that a BringIntoView() the host calls later still works.
-    private void SuppressBringIntoViewForThisFocusChange()
+    protected override void OnAttachedToVisualTree(VisualTreeAttachmentEventArgs e)
     {
-        _suppressBringIntoView = true;
-        Dispatcher.UIThread.Post(() => _suppressBringIntoView = false, DispatcherPriority.Input);
-    }
-
-    private void OnRequestBringIntoView(object? sender, RequestBringIntoViewEventArgs e)
-    {
-        if (_suppressBringIntoView && ReferenceEquals(e.TargetObject, this))
-            e.Handled = true;
+        base.OnAttachedToVisualTree(e);
+        _focusBehavior.Attach();
     }
 
     protected override void OnGotFocus(FocusChangedEventArgs e)
     {
         base.OnGotFocus(e);
-        if (e.NavigationMethod == NavigationMethod.Pointer)
-            SuppressBringIntoViewForThisFocusChange();
+        _focusBehavior.HandleGotFocus(e);
         InvalidateVisual();
     }
 
     protected override void OnLostFocus(FocusChangedEventArgs e)
     {
         base.OnLostFocus(e);
-
-        // A context menu supplied by the host takes focus while it is open;
-        // clearing the selection here would leave its commands nothing to act on.
-        if (ClearSelectionOnLostFocus && HasSelection && ContextMenu?.IsOpen != true)
-            ClearSelectionNoDelete();
-
+        _focusBehavior.HandleLostFocus();
         InvalidateVisual();
     }
 
     protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e)
     {
+        _focusBehavior.Detach();
         _resizeTimer?.Stop();
         base.OnDetachedFromVisualTree(e);
         UnsubscribeItems(Items);
@@ -637,6 +620,10 @@ public class NoteEditor : Control
             OnItemsPropertyChanged(
                 change.OldValue as IList<NoteItemData>,
                 change.NewValue as IList<NoteItemData>);
+        }
+        else if (change.Property == ContextMenuProperty)
+        {
+            _focusBehavior?.HandleContextMenuChanged(change.NewValue as ContextMenu);
         }
         else if (change.Property == ImagesProperty)
         {

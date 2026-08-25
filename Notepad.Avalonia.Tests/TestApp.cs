@@ -1,5 +1,6 @@
 using global::Avalonia;
 using global::Avalonia.Headless;
+using global::Avalonia.Themes.Simple;
 
 [assembly: AvaloniaTestApplication(typeof(Notepad.Avalonia.Tests.TestAppBuilder))]
 
@@ -14,4 +15,7 @@ public class TestAppBuilder
 
 public class App : Application
 {
+    // Templated controls (ScrollViewer in particular) need a theme, otherwise they
+    // have no presenter and silently do nothing in tests.
+    public override void Initialize() => Styles.Add(new SimpleTheme());
 }

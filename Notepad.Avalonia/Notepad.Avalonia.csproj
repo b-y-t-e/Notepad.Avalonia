@@ -7,11 +7,11 @@
 
     <!-- NuGet package metadata -->
     <PackageId>Notepad.Avalonia</PackageId>
-    <Version>0.1.3</Version>
+    <Version>0.2.0</Version>
     <Title>Notepad.Avalonia</Title>
     <Authors>b-y-t-e</Authors>
-    <Description>A custom rich-text note editor control for Avalonia UI with inline image pasting support. Features multi-line notes, inline images, undo/redo, text selection, clipboard support, and MVVM binding.</Description>
-    <PackageTags>Notes Notepad Avalonia UI Editor Control MVVM Images</PackageTags>
+    <Description>Two markdown note controls for Avalonia UI: NoteEditor, a rich-text editor with inline image pasting, undo/redo, text selection, clipboard support and MVVM binding; and MarkdownViewer, a read-only renderer with full markdown support (headings, lists, tasks, quotes, code, tables, links, images), free text selection and copy.</Description>
+    <PackageTags>Notes Notepad Markdown Viewer Renderer Avalonia UI Editor Control MVVM Images</PackageTags>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageProjectUrl>https://github.com/b-y-t-e/Notepad.Avalonia</PackageProjectUrl>
     <RepositoryUrl>https://github.com/b-y-t-e/Notepad.Avalonia</RepositoryUrl>

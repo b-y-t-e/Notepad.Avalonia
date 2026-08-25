@@ -6,15 +6,15 @@ set CONFIG=%1
 if "%CONFIG%"=="" set CONFIG=Release
 
 echo === Build (%CONFIG%) ===
-dotnet build Notes.Avalonia.slnx -c %CONFIG%
+dotnet build Notepad.Avalonia.slnx -c %CONFIG%
 if errorlevel 1 exit /b %errorlevel%
 
 echo === Tests ===
-dotnet test Notes.Avalonia.Tests\Notes.Avalonia.Tests.csproj -c %CONFIG% --no-build
+dotnet test Notepad.Avalonia.Tests\Notepad.Avalonia.Tests.csproj -c %CONFIG% --no-build
 if errorlevel 1 exit /b %errorlevel%
 
 echo === Pack ===
-dotnet pack Notes.Avalonia\Notes.Avalonia.csproj -c %CONFIG% --no-build -o artifacts\
+dotnet pack Notepad.Avalonia\Notepad.Avalonia.csproj -c %CONFIG% --no-build -o artifacts\
 if errorlevel 1 exit /b %errorlevel%
 
 echo === Done ===
